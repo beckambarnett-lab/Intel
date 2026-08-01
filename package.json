@@ -1,0 +1,25 @@
+{
+  "name": "ember",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A multiplayer strategy survival game played in the dark.",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,client -c cyan,magenta \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "npm run dev --workspace @ember/server",
+    "dev:client": "npm run dev --workspace @ember/client",
+    "build": "npm run build --workspace @ember/client",
+    "typecheck": "tsc --build",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "concurrently": "^9.1.0",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.10"
+  }
+}

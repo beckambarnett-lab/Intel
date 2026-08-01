@@ -1,0 +1,317 @@
+import {
+  INTERP_DELAY_MS,
+  PROTOCOL_VERSION,
+  TICK_DT,
+  createWorld,
+  decode,
+  distance,
+  encode,
+  step,
+} from '@ember/shared';
+import type { ClientMsg, InputFrame, Player, PlayerId, ServerMsg, WorldState } from '@ember/shared';
+
+interface RemoteSample {
+  t: number;
+  x: number;
+  y: number;
+}
+
+interface RemoteTrack {
+  name: string;
+  samples: RemoteSample[];
+}
+
+export interface RenderedPlayer {
+  id: PlayerId;
+  name: string;
+  x: number;
+  y: number;
+  isLocal: boolean;
+}
+
+export interface NetStats {
+  connected: boolean;
+  playerId: string;
+  serverTick: number;
+  ack: number;
+  pending: number;
+  corrections: number;
+  lastCorrectionM: number;
+  rttMs: number;
+  simulatedLagMs: number;
+  peers: number;
+}
+
+/**
+ * Client networking, prediction, and reconciliation.
+ *
+ * The local player is simulated immediately so input feels instant; every other
+ * entity is rendered INTERP_DELAY_MS in the past and interpolated, because
+ * guessing about other people's movement looks far worse than showing it late.
+ *
+ * Prediction runs the exact `step` from @ember/shared. If this ever diverges
+ * from the server's copy, the symptom is rubber-banding that only appears under
+ * latency and is miserable to diagnose — hence the correction metrics below,
+ * which make divergence visible immediately rather than eventually.
+ */
+export class NetClient {
+  playerId: PlayerId | null = null;
+  connected = false;
+
+  private socket: WebSocket | null = null;
+  private url: string;
+  private name: string;
+
+  /** Predicted world. Contains ONLY the local player. */
+  private predicted: WorldState = createWorld(1, 1);
+  private pending: InputFrame[] = [];
+  private seq = 0;
+
+  private remote = new Map<PlayerId, RemoteTrack>();
+
+  /** Half of the simulated round trip, applied to each direction. */
+  private lagHalfMs: number;
+
+  private sentAt = new Map<number, number>();
+  private stats = {
+    serverTick: 0,
+    ack: 0,
+    corrections: 0,
+    lastCorrectionM: 0,
+    rttMs: 0,
+  };
+
+  constructor(url: string, name: string, simulatedLagMs = 0) {
+    this.url = url;
+    this.name = name;
+    this.lagHalfMs = simulatedLagMs / 2;
+  }
+
+  connect(): void {
+    const socket = new WebSocket(this.url);
+    this.socket = socket;
+
+    socket.addEventListener('open', () => {
+      this.connected = true;
+      this.send({ t: 'join', name: this.name, protocol: PROTOCOL_VERSION });
+    });
+
+    socket.addEventListener('message', (ev) => {
+      const msg = decode<ServerMsg>(String(ev.data));
+      if (!msg) return;
+      this.withInboundLag(() => this.handle(msg));
+    });
+
+    socket.addEventListener('close', () => {
+      this.connected = false;
+      // Retry rather than leaving a dead tab; the dev server restarts often.
+      setTimeout(() => this.connect(), 1000);
+    });
+
+    socket.addEventListener('error', () => socket.close());
+  }
+
+  // -------------------------------------------------------------------------
+  // Outbound
+  // -------------------------------------------------------------------------
+
+  /** Called once per fixed sim tick. Predicts locally, then sends the intent. */
+  tick(sample: (seq: number) => InputFrame): void {
+    if (!this.playerId) return;
+
+    const frame = sample(++this.seq);
+    this.pending.push(frame);
+    this.sentAt.set(frame.seq, performance.now());
+
+    // Predict immediately — this is what makes movement feel instant.
+    step(this.predicted, { [this.playerId]: frame }, TICK_DT);
+
+    this.send({ t: 'input', frame });
+  }
+
+  private send(msg: ClientMsg): void {
+    const socket = this.socket;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    const payload = encode(msg);
+    if (this.lagHalfMs > 0) {
+      setTimeout(() => {
+        if (socket.readyState === WebSocket.OPEN) socket.send(payload);
+      }, this.lagHalfMs);
+    } else {
+      socket.send(payload);
+    }
+  }
+
+  private withInboundLag(fn: () => void): void {
+    if (this.lagHalfMs > 0) setTimeout(fn, this.lagHalfMs);
+    else fn();
+  }
+
+  // -------------------------------------------------------------------------
+  // Inbound
+  // -------------------------------------------------------------------------
+
+  private handle(msg: ServerMsg): void {
+    switch (msg.t) {
+      case 'welcome': {
+        this.playerId = msg.playerId;
+        // Rebuild the predicted world with the server's bounds, holding only us.
+        this.predicted = createWorld(msg.world.bounds.w, msg.world.bounds.h);
+        const me = msg.world.players[msg.playerId];
+        if (me) this.predicted.players[msg.playerId] = structuredClone(me);
+        this.predicted.tick = msg.world.tick;
+        break;
+      }
+
+      case 'reject': {
+        console.error('[net] rejected:', msg.reason);
+        this.socket?.close();
+        break;
+      }
+
+      case 'snapshot': {
+        this.reconcile(msg.players, msg.ack);
+        this.stats.serverTick = msg.tick;
+        this.stats.ack = msg.ack;
+
+        const sent = this.sentAt.get(msg.ack);
+        if (sent !== undefined) {
+          this.stats.rttMs = performance.now() - sent;
+          for (const seq of this.sentAt.keys()) {
+            if (seq <= msg.ack) this.sentAt.delete(seq);
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  /**
+   * Snap to authority, then replay everything the server has not yet consumed.
+   *
+   * If prediction is correct this lands exactly where we already were and the
+   * player sees nothing at all — which is the entire point.
+   */
+  private reconcile(players: Player[], ack: number): void {
+    const now = performance.now();
+    const localId = this.playerId;
+
+    for (const p of players) {
+      if (p.id === localId) {
+        const mine = this.predicted.players[p.id];
+        if (!mine) {
+          this.predicted.players[p.id] = structuredClone(p);
+          continue;
+        }
+
+        const before = { x: mine.pos.x, y: mine.pos.y };
+
+        mine.pos.x = p.pos.x;
+        mine.pos.y = p.pos.y;
+        mine.vel.x = p.vel.x;
+        mine.vel.y = p.vel.y;
+        mine.loadKg = p.loadKg;
+
+        this.pending = this.pending.filter((f) => f.seq > ack);
+        for (const frame of this.pending) {
+          step(this.predicted, { [p.id]: frame }, TICK_DT);
+        }
+
+        const drift = distance(before, mine.pos);
+        // Sub-millimetre drift is float noise, not a real correction.
+        if (drift > 0.001) {
+          this.stats.corrections++;
+          this.stats.lastCorrectionM = drift;
+        }
+      } else {
+        let track = this.remote.get(p.id);
+        if (!track) {
+          track = { name: p.name, samples: [] };
+          this.remote.set(p.id, track);
+        }
+        track.name = p.name;
+        track.samples.push({ t: now, x: p.pos.x, y: p.pos.y });
+        // Keep a little more than the interpolation window.
+        while (track.samples.length > 40) track.samples.shift();
+      }
+    }
+
+    // Drop anyone who vanished from the snapshot. From Step 2 this also covers
+    // players who simply moved out of sight, which is correct: if we cannot see
+    // them, we should not be drawing them.
+    const present = new Set(players.map((p) => p.id));
+    for (const id of this.remote.keys()) {
+      if (!present.has(id)) this.remote.delete(id);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Read models for rendering
+  // -------------------------------------------------------------------------
+
+  /** All players to draw this frame: local predicted, remote interpolated. */
+  renderedPlayers(now: number): RenderedPlayer[] {
+    const out: RenderedPlayer[] = [];
+
+    const localId = this.playerId;
+    if (localId) {
+      const me = this.predicted.players[localId];
+      if (me) {
+        out.push({ id: localId, name: me.name, x: me.pos.x, y: me.pos.y, isLocal: true });
+      }
+    }
+
+    const renderTime = now - INTERP_DELAY_MS;
+    for (const [id, track] of this.remote) {
+      const pos = sampleAt(track.samples, renderTime);
+      if (pos) out.push({ id, name: track.name, x: pos.x, y: pos.y, isLocal: false });
+    }
+
+    return out;
+  }
+
+  get bounds(): { w: number; h: number } {
+    return this.predicted.bounds;
+  }
+
+  getStats(): NetStats {
+    return {
+      connected: this.connected,
+      playerId: this.playerId ?? '—',
+      serverTick: this.stats.serverTick,
+      ack: this.stats.ack,
+      pending: this.pending.length,
+      corrections: this.stats.corrections,
+      lastCorrectionM: this.stats.lastCorrectionM,
+      rttMs: this.stats.rttMs,
+      simulatedLagMs: this.lagHalfMs * 2,
+      peers: this.remote.size,
+    };
+  }
+}
+
+/** Linear interpolation between the two samples bracketing `t`. */
+function sampleAt(samples: RemoteSample[], t: number): { x: number; y: number } | null {
+  if (samples.length === 0) return null;
+
+  const newest = samples[samples.length - 1];
+  const oldest = samples[0];
+  if (!newest || !oldest) return null;
+
+  // Not enough history yet, or we have fallen behind: clamp rather than guess.
+  if (t >= newest.t) return { x: newest.x, y: newest.y };
+  if (t <= oldest.t) return { x: oldest.x, y: oldest.y };
+
+  for (let i = samples.length - 1; i > 0; i--) {
+    const b = samples[i];
+    const a = samples[i - 1];
+    if (!a || !b) continue;
+    if (a.t <= t && t <= b.t) {
+      const span = b.t - a.t;
+      const alpha = span > 0 ? (t - a.t) / span : 0;
+      return { x: a.x + (b.x - a.x) * alpha, y: a.y + (b.y - a.y) * alpha };
+    }
+  }
+
+  return { x: newest.x, y: newest.y };
+}

@@ -1,0 +1,13 @@
+# Normalise line endings. Without this, working across Windows and Linux churns
+# CRLF/LF noise through every diff — especially painful in GLSL shader files.
+* text=auto eol=lf
+
+# Binary assets — never touch these.
+*.png binary
+*.jpg binary
+*.webp binary
+*.ogg binary
+*.wav binary
+*.mp3 binary
+*.ttf binary
+*.woff2 binary

@@ -1,3 +1,22 @@
 node_modules/
 *.log
 .DS_Store
+
+# Build output
+dist/
+dist-types/
+build/
+*.tsbuildinfo
+
+# Secrets — ANTHROPIC_API_KEY lives here from Step 10 onward.
+# This key is server-side only and must never reach a client bundle.
+.env
+.env.*
+!.env.example
+
+# Editor
+.vscode/
+.idea/
+
+# Test / coverage
+coverage/
