@@ -1,35 +1,44 @@
-import { PIXELS_PER_METRE, PLAYER_RADIUS } from '@ember/shared';
+import { PIXELS_PER_METRE, PLAYER_RADIUS, TILE_M, isOpaqueTile } from '@ember/shared';
+import type { Campfire, OccluderGrid } from '@ember/shared';
 import { Application, Container, Graphics, Text, TextStyle } from 'pixi.js';
 import type { RenderedPlayer } from '../net.js';
+import { LightField } from './lighting.js';
+import type { Light } from './lighting.js';
 
 const COLOUR = {
   ground: 0x14141a,
-  grid: 0x1e1e27,
-  wall: 0x3a3a48,
+  grid: 0x1c1c24,
+  occluder: 0x2c2c36,
+  occluderEdge: 0x3a3a48,
+  fire: 0xff9436,
   localPlayer: 0xffb454, // firelight orange — the one warm colour (Q128)
   remotePlayer: 0x7d8ea3,
   label: 0xc8c4bd,
 } as const;
 
 /**
- * Step 1 renderer: a lit rectangle with debug bodies, enough to see that
- * movement and netcode are correct.
+ * The renderer.
  *
- * Everything here is placeholder. Step 2 replaces the flat draw with the
- * lighting mask, at which point the ground stops being visible by default and
- * the game starts looking like itself.
+ * The world is drawn in full and then masked by the light field, so the only
+ * thing on screen is what is genuinely lit. Note that this is a rendering
+ * concern only — the server has already refused to send anything outside the
+ * light (Q122), so the mask is the second of two locks, not the only one.
  */
 export class Stage {
   private app = new Application();
+  /** Everything that gets masked by light. */
   private world = new Container();
   private ground = new Graphics();
+  private occluders = new Graphics();
+  private fire = new Graphics();
   private bodies = new Container();
+  private lights = new LightField();
   private sprites = new Map<string, { holder: Container }>();
   private labelStyle!: TextStyle;
 
   async init(mount: HTMLElement): Promise<void> {
     await this.app.init({
-      background: COLOUR.ground,
+      background: 0x000000,
       resizeTo: window,
       antialias: true,
       autoDensity: true,
@@ -45,19 +54,31 @@ export class Stage {
     });
 
     this.world.addChild(this.ground);
+    this.world.addChild(this.occluders);
+    this.world.addChild(this.fire);
     this.world.addChild(this.bodies);
+
+    // The light field shares the world's transform, so both are added to the
+    // stage and moved together by the camera below.
     this.app.stage.addChild(this.world);
+    this.app.stage.addChild(this.lights.container);
+    this.world.mask = this.lights.container;
   }
 
-  /** Draw the sandbox floor. Called once bounds are known. */
-  drawBounds(widthM: number, heightM: number): void {
+  /**
+   * Draw the static world once: ground, then every solid tile.
+   *
+   * The full map is drawn even though most of it is never lit — masking is
+   * cheaper than rebuilding geometry per frame, and none of it reaches the
+   * screen unless a light polygon reveals it.
+   */
+  drawMap(grid: OccluderGrid, widthM: number, heightM: number, campfire: Campfire): void {
     const w = widthM * PIXELS_PER_METRE;
     const h = heightM * PIXELS_PER_METRE;
 
     this.ground.clear();
     this.ground.rect(0, 0, w, h).fill(COLOUR.ground);
 
-    // A metre grid, so speed and distance are readable while tuning.
     for (let x = 0; x <= widthM; x += 5) {
       this.ground
         .moveTo(x * PIXELS_PER_METRE, 0)
@@ -71,10 +92,34 @@ export class Stage {
         .stroke({ width: 1, color: COLOUR.grid });
     }
 
-    this.ground.rect(0, 0, w, h).stroke({ width: 2, color: COLOUR.wall });
+    this.occluders.clear();
+    const tilePx = TILE_M * PIXELS_PER_METRE;
+    for (let ty = 0; ty < grid.h; ty++) {
+      for (let tx = 0; tx < grid.w; tx++) {
+        if (!isOpaqueTile(grid, tx, ty)) continue;
+        this.occluders
+          .rect(tx * tilePx, ty * tilePx, tilePx, tilePx)
+          .fill(COLOUR.occluder)
+          .stroke({ width: 1, color: COLOUR.occluderEdge });
+      }
+    }
+
+    this.fire.clear();
+    this.fire
+      .circle(
+        campfire.pos.x * PIXELS_PER_METRE,
+        campfire.pos.y * PIXELS_PER_METRE,
+        0.6 * PIXELS_PER_METRE,
+      )
+      .fill(COLOUR.fire);
   }
 
-  render(players: RenderedPlayer[], cameraTargetM: { x: number; y: number } | null): void {
+  render(
+    grid: OccluderGrid,
+    campfire: Campfire,
+    players: RenderedPlayer[],
+    cameraTargetM: { x: number; y: number } | null,
+  ): void {
     const seen = new Set<string>();
 
     for (const p of players) {
@@ -110,9 +155,21 @@ export class Stage {
       this.sprites.delete(id);
     }
 
+    // Every visible lantern plus the bonfire. Anyone whose light should not be
+    // contributing is already absent from `players` — the server culled them.
+    const lights: Light[] = [{ pos: campfire.pos, radiusM: campfire.radiusM }];
+    for (const p of players) {
+      lights.push({ pos: { x: p.x, y: p.y }, radiusM: p.lightRadiusM });
+    }
+    this.lights.update(grid, lights);
+
     if (cameraTargetM) {
-      this.world.x = this.app.screen.width / 2 - cameraTargetM.x * PIXELS_PER_METRE;
-      this.world.y = this.app.screen.height / 2 - cameraTargetM.y * PIXELS_PER_METRE;
+      const x = this.app.screen.width / 2 - cameraTargetM.x * PIXELS_PER_METRE;
+      const y = this.app.screen.height / 2 - cameraTargetM.y * PIXELS_PER_METRE;
+      this.world.x = x;
+      this.world.y = y;
+      this.lights.container.x = x;
+      this.lights.container.y = y;
     }
   }
 }

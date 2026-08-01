@@ -18,8 +18,8 @@ export interface EmberServer {
  * stand up a real server on an ephemeral port and drive it with real clients —
  * netcode that is only ever tested by hand is netcode that breaks silently.
  */
-export function createServer(port: number): EmberServer {
-  const room = new Room();
+export function createServer(port: number, mapSeed?: number): EmberServer {
+  const room = new Room(mapSeed);
   room.start();
 
   const wss = new WebSocketServer({ port });

@@ -1,7 +1,9 @@
 import { TICK_DT } from '../constants.js';
 import type { TickInputs, WorldState } from '../types.js';
+import { lantern } from './lantern.js';
 import { applyInputs, integrate } from './movement.js';
 
+export * from './lantern.js';
 export * from './movement.js';
 
 /**
@@ -13,7 +15,7 @@ export * from './movement.js';
  *   2  weight             load -> speedMul, noiseMul            [Step 4]
  *   3  movement           integrate, collide                    [Step 1] DONE
  *   4  emitSounds         movement/chop/gun -> SoundEvent[]     [Step 6]
- *   5  lantern            drain fuel by shutter stage           [Step 2]
+ *   5  lantern            drain fuel by shutter stage           [Step 2] DONE
  *   6  fire               drain fuel, tier, radii, embers       [Step 3]
  *   7  chopping           swings, fell trees, spawn logs        [Step 4]
  *   8  items              pickup, drop, deposit, stoke          [Step 4]
@@ -36,6 +38,7 @@ export * from './movement.js';
 export function step(world: WorldState, inputs: TickInputs, dt: number = TICK_DT): void {
   applyInputs(world, inputs); // 1
   integrate(world, dt); // 3
+  lantern(world, dt); // 5
   world.tick++;
 }
 

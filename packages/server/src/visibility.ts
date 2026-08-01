@@ -1,0 +1,96 @@
+import { VISIBILITY_HYSTERESIS_MS, canSee, lanternRadius } from '@ember/shared';
+import type { Player, PlayerId, WorldState } from '@ember/shared';
+
+/**
+ * Per-player visibility culling — the anti-cheat spine (Q122).
+ *
+ * The rule this file exists to enforce: **the server never sends a client
+ * anything it cannot see.** Not "sends it and the client hides it" — a client
+ * is an adversary with devtools, and anything on the wire is visible to it. If
+ * this is ever relaxed, the darkness stops being a game mechanic and becomes a
+ * rendering effect, and every system built on top of it (the duel, listen mode,
+ * the director's information asymmetry) stops meaning anything.
+ *
+ * A player sees another entity when either:
+ *   - it is inside their own lantern's light and unobstructed, or
+ *   - it is lit by the bonfire, and they have an unobstructed line to it.
+ *
+ * The second clause needs both halves. Standing in firelight makes you visible
+ * to anyone who can see the fire's clearing — not to someone on the far side of
+ * a rock, who would otherwise be handed your position through a wall.
+ */
+export class VisibilityIndex {
+  /** `${viewer}|${target}` -> last timestamp the pair was genuinely visible. */
+  private lastSeenAt = new Map<string, number>();
+
+  /**
+   * The entities `viewerId` is allowed to receive this tick.
+   *
+   * `nowMs` is passed rather than read from the clock so the hysteresis window
+   * is testable without waiting on real time.
+   */
+  visibleTo(world: WorldState, viewerId: PlayerId, nowMs: number): Player[] {
+    const viewer = world.players[viewerId];
+    if (!viewer) return [];
+
+    const out: Player[] = [];
+    const lantern = lanternRadius(viewer.lantern);
+
+    for (const id of Object.keys(world.players)) {
+      const target = world.players[id];
+      if (!target) continue;
+
+      // You always know where you are. Culling yourself would break prediction.
+      if (id === viewerId) {
+        out.push(target);
+        continue;
+      }
+
+      const key = `${viewerId}|${id}`;
+
+      if (this.isVisible(world, viewer, target, lantern)) {
+        this.lastSeenAt.set(key, nowMs);
+        out.push(target);
+        continue;
+      }
+
+      // Hysteresis (§21 Step 2.5): keep sending briefly after they drop out, so
+      // someone walking your light's edge does not strobe. This only ever
+      // extends a target you already legitimately saw — it never reveals one
+      // early, which is why it cannot be used to see into the dark.
+      const last = this.lastSeenAt.get(key);
+      if (last !== undefined && nowMs - last < VISIBILITY_HYSTERESIS_MS) {
+        out.push(target);
+      }
+    }
+
+    return out;
+  }
+
+  private isVisible(
+    world: WorldState,
+    viewer: Player,
+    target: Player,
+    lanternRadiusM: number,
+  ): boolean {
+    if (canSee(world.grid, viewer.pos, lanternRadiusM, target.pos)) return true;
+
+    const fire = world.campfire;
+    return (
+      canSee(world.grid, fire.pos, fire.radiusM, target.pos) &&
+      // Unbounded viewer distance is intentional: a lit figure across open
+      // ground is genuinely visible, and that is a real tactical fact about
+      // standing in the firelight.
+      canSee(world.grid, viewer.pos, Infinity, target.pos)
+    );
+  }
+
+  /** Drop a departed player's pairs so the map does not grow across a long run. */
+  forget(playerId: PlayerId): void {
+    for (const key of this.lastSeenAt.keys()) {
+      if (key.startsWith(`${playerId}|`) || key.endsWith(`|${playerId}`)) {
+        this.lastSeenAt.delete(key);
+      }
+    }
+  }
+}

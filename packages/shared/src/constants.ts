@@ -98,6 +98,13 @@ export const FIRE_TIERS = [
 /** Creatures cannot cross this fraction of the fire's light radius (Q6). */
 export const FIRE_SAFE_RADIUS_FRAC = 0.7;
 
+/**
+ * Step 2 only: the bonfire is a fixed light with no fuel behind it yet, so the
+ * darkness has a second light source to be culled against. Step 3 deletes this
+ * and derives the radius from fuel via FIRE_TIERS.
+ */
+export const FIRE_STATIC_RADIUS_M = FIRE_TIERS[0].radiusM;
+
 /** Below this fuel fraction the camp perimeter fails entirely (Q7). */
 export const FIRE_PERIMETER_MIN_FRAC = 0.15;
 
@@ -115,6 +122,20 @@ export const LANTERN_STAGES = {
 export const LANTERN_TANK = 50; // Q38
 export const LANTERN_REFUEL_SEC = 1.5; // Q39
 export const LANTERN_SHUTTER_SEC = 0.3; // Q40
+
+/** Shutter cycle order. `F` steps forward through this and wraps (Q126). */
+export const LANTERN_STAGE_ORDER = ['hooded', 'low', 'full'] as const;
+
+/** What you start a run holding. */
+export const LANTERN_START_STAGE = 'low';
+
+/**
+ * The opening bloom (Q40): for a moment after the shutter opens the flame
+ * flares past its settled radius. It is deliberately a tell — it is what gets
+ * you seen when you open up at the wrong moment.
+ */
+export const LANTERN_BLOOM_MULT = 1.7;
+export const LANTERN_BLOOM_SEC = 0.25;
 
 // ---------------------------------------------------------------------------
 // Memory rot (§7)
@@ -146,11 +167,65 @@ export const WORLD_LENGTH_M = 1200;
 export const WORLD_WIDTH_M = 250;
 
 /**
- * Step 1 only: a small lit rectangle to validate movement and netcode before
- * the real map generator exists. Replaced in Step 2.
+ * The sandbox: a small slice of world used to build and verify the systems
+ * before the real zone generator exists (Q107). Replaced in Step 11–12.
  */
 export const SANDBOX_WIDTH_M = 60;
 export const SANDBOX_HEIGHT_M = 40;
+
+/**
+ * Seed for the sandbox map. Client and server both build the occluder grid
+ * from this rather than shipping the grid over the wire, so the geometry
+ * cannot disagree between the two.
+ */
+export const SANDBOX_MAP_SEED = 0x1337;
+
+/** Scattered 1m trunks in the sandbox — the things that cast the shadows. */
+export const SANDBOX_TREE_COUNT = 110;
+
+/** Where the sandbox bonfire sits, and the clearing kept free around it. */
+export const SANDBOX_FIRE_POS = { x: 12, y: 20 } as const;
+export const SANDBOX_FIRE_CLEARING_M = 7;
+
+// ---------------------------------------------------------------------------
+// Occluder grid (§21 Step 2)
+// ---------------------------------------------------------------------------
+
+/** Tile size in metres. The grid is 1m per DESIGN.md §21 Step 2.1. */
+export const TILE_M = 1;
+
+/** Opacity at or above which a tile blocks both sight and movement. */
+export const OCCLUDER_OPAQUE = 255;
+export const OCCLUDER_BLOCK_THRESHOLD = 128;
+
+// ---------------------------------------------------------------------------
+// Line of sight (§21 Step 2.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Angular nudge applied either side of an occluder corner. The pair of rays
+ * straddles the corner so one runs past it and one stops on it — that is what
+ * produces the shadow edge. Too small and float error merges them back.
+ */
+export const LOS_CORNER_EPSILON = 0.0001;
+
+/** Rays cast on a uniform ring, so unobstructed light reads as a circle. */
+export const VIS_POLY_RING_RAYS = 72;
+
+/** Hard bound on DDA iterations. A ray can never traverse more tiles than this. */
+export const LOS_MAX_STEPS = 4096;
+
+// ---------------------------------------------------------------------------
+// Visibility culling (Q122, §21 Step 2.5)
+// ---------------------------------------------------------------------------
+
+/**
+ * How long an entity keeps being sent after it stops being visible. Without
+ * this, anything walking the edge of your light flickers in and out every tick.
+ * It only ever extends something you legitimately saw — it never reveals
+ * anything early.
+ */
+export const VISIBILITY_HYSTERESIS_MS = 300;
 
 // ---------------------------------------------------------------------------
 // Rendering
@@ -158,3 +233,22 @@ export const SANDBOX_HEIGHT_M = 40;
 
 /** Screen pixels per world metre at default zoom. */
 export const PIXELS_PER_METRE = 16;
+
+/**
+ * Light falloff. The gradient texture is generated once at this resolution and
+ * stretched per light; STOPS is its radial profile (offset, alpha).
+ */
+export const LIGHT_GRADIENT_PX = 256;
+export const LIGHT_FALLOFF_STOPS = [
+  { at: 0, alpha: 1 },
+  { at: 0.55, alpha: 0.72 },
+  { at: 0.85, alpha: 0.22 },
+  { at: 1, alpha: 0 },
+] as const;
+
+/**
+ * Floor on the light mask. Not ambient light — you genuinely cannot see
+ * unlit ground (Q128) — this only keeps the darkness from being a dead black
+ * rectangle on OLED panels.
+ */
+export const DARKNESS_FLOOR_ALPHA = 0.02;

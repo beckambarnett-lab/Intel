@@ -1,17 +1,21 @@
 import {
   PLAYER_RADIUS,
   SANDBOX_HEIGHT_M,
+  SANDBOX_MAP_SEED,
   SANDBOX_WIDTH_M,
   TICK_DT,
   TICK_MS,
   TICK_RATE,
-  cloneWorld,
+  createLantern,
   createWorld,
   encode,
+  isBlockedAt,
+  sandboxGrid,
   step,
 } from '@ember/shared';
 import type { InputFrame, Player, PlayerId, TickInputs, WorldState } from '@ember/shared';
 import type { WebSocket } from 'ws';
+import { VisibilityIndex } from './visibility.js';
 
 /**
  * Bound on how many unconsumed inputs we hold per client. One tick is consumed
@@ -19,6 +23,11 @@ import type { WebSocket } from 'ws';
  * rather than let a lagging or hostile client build an unbounded backlog.
  */
 const MAX_INPUT_BACKLOG = 6;
+
+/** Spawn ring around the bonfire: distinct slots, and a nudge outward per retry. */
+const SPAWN_RING_SLOTS = 6;
+const SPAWN_RING_M = 3;
+const SPAWN_RING_ATTEMPTS = 12;
 
 interface Connection {
   socket: WebSocket;
@@ -40,9 +49,13 @@ export class Room {
   private nextPlayerNumber = 0;
   private timer: NodeJS.Timeout | null = null;
   private nextTickAt = 0;
+  private visibility = new VisibilityIndex();
+  private readonly mapSeed: number;
 
-  constructor() {
-    this.world = createWorld(SANDBOX_WIDTH_M, SANDBOX_HEIGHT_M);
+  constructor(mapSeed?: number) {
+    this.mapSeed = mapSeed ?? SANDBOX_MAP_SEED;
+    const seed = this.mapSeed;
+    this.world = createWorld(SANDBOX_WIDTH_M, SANDBOX_HEIGHT_M, sandboxGrid(seed));
   }
 
   start(): void {
@@ -63,27 +76,31 @@ export class Room {
   join(socket: WebSocket, name: string): PlayerId {
     const playerId = `p${++this.nextPlayerNumber}`;
 
-    // Spread spawns along the sandbox so two players are never stacked.
-    const spawnX = 6 + ((this.nextPlayerNumber - 1) % 5) * 4;
-    const spawnY = SANDBOX_HEIGHT_M / 2;
-
     const player: Player = {
       id: playerId,
       name: name.slice(0, 24) || playerId,
-      pos: { x: spawnX, y: spawnY },
+      pos: this.spawnPoint(this.nextPlayerNumber - 1),
       vel: { x: 0, y: 0 },
       loadKg: 0,
+      lantern: createLantern(),
     };
 
     this.world.players[playerId] = player;
     this.connections.set(playerId, { socket, playerId, queue: [], ack: 0 });
 
+    // Only this player's own state. Sending the world here would hand over
+    // every other spawn position before culling ever got a chance (Q122) —
+    // the leak would be one message wide and permanent.
     socket.send(
       encode({
         t: 'welcome',
         playerId,
         tickRate: TICK_RATE,
-        world: cloneWorld(this.world),
+        tick: this.world.tick,
+        bounds: { ...this.world.bounds },
+        mapSeed: this.mapSeed,
+        campfire: structuredClone(this.world.campfire),
+        you: structuredClone(player),
       }),
     );
 
@@ -91,9 +108,27 @@ export class Room {
     return playerId;
   }
 
+  /**
+   * Spawn on a ring around the bonfire, one step round per player, so nobody
+   * lands stacked and everybody starts inside the firelight.
+   */
+  private spawnPoint(index: number): { x: number; y: number } {
+    const fire = this.world.campfire.pos;
+    const angle = (index * Math.PI * 2) / SPAWN_RING_SLOTS;
+
+    for (let ring = 0; ring < SPAWN_RING_ATTEMPTS; ring++) {
+      const r = SPAWN_RING_M + ring * PLAYER_RADIUS * 2;
+      const p = { x: fire.x + Math.cos(angle) * r, y: fire.y + Math.sin(angle) * r };
+      if (!isBlockedAt(this.world.grid, p.x, p.y)) return p;
+    }
+
+    return { x: fire.x, y: fire.y };
+  }
+
   leave(playerId: PlayerId): void {
     this.connections.delete(playerId);
     delete this.world.players[playerId];
+    this.visibility.forget(playerId);
     console.log(`[room] ${playerId} left (${this.connections.size} online)`);
   }
 
@@ -154,14 +189,20 @@ export class Room {
     this.broadcast();
   }
 
+  /**
+   * One snapshot per client, each containing only what that client can see.
+   *
+   * There is deliberately no "everyone" payload here to accidentally reach for
+   * — the culled set is computed per connection or not at all (Q122).
+   */
   private broadcast(): void {
-    // Step 1 sends every player to everyone. Step 2 replaces this with
-    // per-player visibility culling (Q122) — the client must never receive an
-    // entity it cannot see, because that is the whole anti-cheat story.
-    const players = Object.values(this.world.players);
+    const now = performance.now();
 
     for (const conn of this.connections.values()) {
       if (conn.socket.readyState !== conn.socket.OPEN) continue;
+
+      const players = this.visibility.visibleTo(this.world, conn.playerId, now);
+
       conn.socket.send(
         encode({
           t: 'snapshot',

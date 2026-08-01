@@ -6,9 +6,21 @@ import {
   decode,
   distance,
   encode,
+  lanternRadius,
+  sandboxGrid,
   step,
 } from '@ember/shared';
-import type { ClientMsg, InputFrame, Player, PlayerId, ServerMsg, WorldState } from '@ember/shared';
+import type {
+  Campfire,
+  ClientMsg,
+  InputFrame,
+  LanternState,
+  OccluderGrid,
+  Player,
+  PlayerId,
+  ServerMsg,
+  WorldState,
+} from '@ember/shared';
 
 interface RemoteSample {
   t: number;
@@ -19,6 +31,7 @@ interface RemoteSample {
 interface RemoteTrack {
   name: string;
   samples: RemoteSample[];
+  lantern: LanternState;
 }
 
 export interface RenderedPlayer {
@@ -27,6 +40,12 @@ export interface RenderedPlayer {
   x: number;
   y: number;
   isLocal: boolean;
+  /**
+   * The light this player is carrying, in metres. Remote players get theirs
+   * from the snapshot, which the server only sends while you can see them —
+   * so a light you can see is a light that is genuinely there.
+   */
+  lightRadiusM: number;
 }
 
 export interface NetStats {
@@ -81,10 +100,18 @@ export class NetClient {
     rttMs: 0,
   };
 
-  constructor(url: string, name: string, simulatedLagMs = 0) {
+  /**
+   * When set, every inbound snapshot's entity list is logged. This is the
+   * instrument for the Step 2 gate: with it on, nothing you cannot see on
+   * screen may ever appear in the log.
+   */
+  private netlog: boolean;
+
+  constructor(url: string, name: string, simulatedLagMs = 0, netlog = false) {
     this.url = url;
     this.name = name;
     this.lagHalfMs = simulatedLagMs / 2;
+    this.netlog = netlog;
   }
 
   connect(): void {
@@ -155,11 +182,14 @@ export class NetClient {
     switch (msg.t) {
       case 'welcome': {
         this.playerId = msg.playerId;
-        // Rebuild the predicted world with the server's bounds, holding only us.
-        this.predicted = createWorld(msg.world.bounds.w, msg.world.bounds.h);
-        const me = msg.world.players[msg.playerId];
-        if (me) this.predicted.players[msg.playerId] = structuredClone(me);
-        this.predicted.tick = msg.world.tick;
+
+        // Rebuild the map from the seed with the same shared code the server
+        // ran. Prediction collides against this grid, so it has to be the same
+        // geometry byte for byte — deriving it beats shipping it.
+        this.predicted = createWorld(msg.bounds.w, msg.bounds.h, sandboxGrid(msg.mapSeed));
+        this.predicted.campfire = structuredClone(msg.campfire);
+        this.predicted.players[msg.playerId] = structuredClone(msg.you);
+        this.predicted.tick = msg.tick;
         break;
       }
 
@@ -170,6 +200,15 @@ export class NetClient {
       }
 
       case 'snapshot': {
+        if (this.netlog) {
+          // Deliberately logs the whole entity list, not a summary: the gate is
+          // that an observer reading this can find nothing they cannot see.
+          console.log(
+            `[netlog] tick ${msg.tick} entities:`,
+            msg.players.map((p) => `${p.id}@${p.pos.x.toFixed(1)},${p.pos.y.toFixed(1)}`),
+          );
+        }
+
         this.reconcile(msg.players, msg.ack);
         this.stats.serverTick = msg.tick;
         this.stats.ack = msg.ack;
@@ -211,6 +250,10 @@ export class NetClient {
         mine.vel.x = p.vel.x;
         mine.vel.y = p.vel.y;
         mine.loadKg = p.loadKg;
+        // The shutter is authoritative too. Replaying the pending inputs below
+        // re-applies any cycle the server has not consumed yet, so a press is
+        // never lost and never applied twice.
+        mine.lantern = structuredClone(p.lantern);
 
         this.pending = this.pending.filter((f) => f.seq > ack);
         for (const frame of this.pending) {
@@ -226,10 +269,11 @@ export class NetClient {
       } else {
         let track = this.remote.get(p.id);
         if (!track) {
-          track = { name: p.name, samples: [] };
+          track = { name: p.name, samples: [], lantern: structuredClone(p.lantern) };
           this.remote.set(p.id, track);
         }
         track.name = p.name;
+        track.lantern = structuredClone(p.lantern);
         track.samples.push({ t: now, x: p.pos.x, y: p.pos.y });
         // Keep a little more than the interpolation window.
         while (track.samples.length > 40) track.samples.shift();
@@ -257,14 +301,30 @@ export class NetClient {
     if (localId) {
       const me = this.predicted.players[localId];
       if (me) {
-        out.push({ id: localId, name: me.name, x: me.pos.x, y: me.pos.y, isLocal: true });
+        out.push({
+          id: localId,
+          name: me.name,
+          x: me.pos.x,
+          y: me.pos.y,
+          isLocal: true,
+          lightRadiusM: lanternRadius(me.lantern),
+        });
       }
     }
 
     const renderTime = now - INTERP_DELAY_MS;
     for (const [id, track] of this.remote) {
       const pos = sampleAt(track.samples, renderTime);
-      if (pos) out.push({ id, name: track.name, x: pos.x, y: pos.y, isLocal: false });
+      if (pos) {
+        out.push({
+          id,
+          name: track.name,
+          x: pos.x,
+          y: pos.y,
+          isLocal: false,
+          lightRadiusM: lanternRadius(track.lantern),
+        });
+      }
     }
 
     return out;
@@ -272,6 +332,21 @@ export class NetClient {
 
   get bounds(): { w: number; h: number } {
     return this.predicted.bounds;
+  }
+
+  /** The true geometry, for collision-free rendering and the light polygons. */
+  get grid(): OccluderGrid {
+    return this.predicted.grid;
+  }
+
+  get campfire(): Campfire {
+    return this.predicted.campfire;
+  }
+
+  /** The local lantern, for the debug HUD. */
+  get lantern(): LanternState | null {
+    const id = this.playerId;
+    return id ? (this.predicted.players[id]?.lantern ?? null) : null;
   }
 
   getStats(): NetStats {

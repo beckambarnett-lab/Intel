@@ -1,6 +1,8 @@
-import { TICK_MS } from '@ember/shared';
+import { TICK_MS, lanternRadius } from '@ember/shared';
+import type { LanternState } from '@ember/shared';
 import { InputSource } from './input.js';
 import { NetClient } from './net.js';
+import type { NetStats } from './net.js';
 import { Stage } from './render/stage.js';
 
 const params = new URLSearchParams(location.search);
@@ -13,6 +15,9 @@ const serverUrl = params.get('server') ?? `ws://${location.hostname}:8787`;
 
 const playerName = params.get('name') ?? `player-${Math.floor(Math.random() * 900 + 100)}`;
 
+/** ?netlog=1 — log every inbound snapshot. The Step 2 verification instrument. */
+const netlog = params.get('netlog') === '1';
+
 async function main(): Promise<void> {
   const mount = document.getElementById('app');
   const hud = document.getElementById('hud');
@@ -22,10 +27,10 @@ async function main(): Promise<void> {
   await stage.init(mount);
 
   const input = new InputSource();
-  const net = new NetClient(serverUrl, playerName, simulatedLag);
+  const net = new NetClient(serverUrl, playerName, simulatedLag, netlog);
   net.connect();
 
-  let boundsDrawn = false;
+  let mapDrawn = false;
   let accumulator = 0;
   let last = performance.now();
 
@@ -44,29 +49,39 @@ async function main(): Promise<void> {
       accumulator -= TICK_MS;
     }
 
-    if (!boundsDrawn && net.playerId) {
-      stage.drawBounds(net.bounds.w, net.bounds.h);
-      boundsDrawn = true;
+    if (!mapDrawn && net.playerId) {
+      stage.drawMap(net.grid, net.bounds.w, net.bounds.h, net.campfire);
+      mapDrawn = true;
     }
 
     const players = net.renderedPlayers(now);
     const me = players.find((p) => p.isLocal) ?? null;
-    stage.render(players, me);
+    stage.render(net.grid, net.campfire, players, me);
 
-    hud.textContent = formatHud(net.getStats());
+    hud.textContent = formatHud(net.getStats(), net.lantern);
     requestAnimationFrame(frame);
   };
 
   requestAnimationFrame(frame);
 }
 
-function formatHud(s: ReturnType<NetClient['getStats']>): string {
-  return [
-    `${s.connected ? 'connected' : 'DISCONNECTED'}  ${s.playerId}  peers ${s.peers}`,
+function formatHud(s: NetStats, lantern: LanternState | null): string {
+  const lines = [
+    `${s.connected ? 'connected' : 'DISCONNECTED'}  ${s.playerId}  visible peers ${s.peers}`,
     `tick ${s.serverTick}  ack ${s.ack}  pending ${s.pending}`,
     `rtt ${s.rttMs.toFixed(0)}ms  simulated lag ${s.simulatedLagMs}ms`,
     `corrections ${s.corrections}  last ${s.lastCorrectionM.toFixed(3)}m`,
-  ].join('\n');
+  ];
+
+  if (lantern) {
+    const moving = lantern.transition > 0 ? ` -> ${lantern.target}` : '';
+    const bloom = lantern.bloom > 0 ? '  BLOOM' : '';
+    lines.push(
+      `lantern ${lantern.stage}${moving}  fuel ${lantern.fuel.toFixed(1)}  radius ${lanternRadius(lantern).toFixed(1)}m${bloom}`,
+    );
+  }
+
+  return lines.join('\n');
 }
 
 void main();
