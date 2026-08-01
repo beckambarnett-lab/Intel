@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # EMBER
 
 *(working title)*
@@ -23,3 +24,7 @@ Design and build plan: `C:\Users\becka\.claude\plans\i-want-to-make-rustling-puf
 
 Predecessor project (read before writing code): `..\Cinders game` — `ARC.md` and `DESIGN.md`
 record what was tried and what broke.
+=======
+# Intel
+A new AI built survival game
+>>>>>>> 2f8eb30e901c280633b891afa24ffecd988d6b6f
