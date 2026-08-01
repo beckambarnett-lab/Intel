@@ -53,6 +53,9 @@ export class InputSource {
       sprint: this.held.has('ShiftLeft') || this.held.has('ShiftRight'),
       creep: this.held.has('KeyC'),
       shutter,
+      // Held, not an edge — it drives the stoke channel, and letting go is
+      // what interrupts it (Q8).
+      interact: this.held.has('KeyE'),
     };
   }
 }

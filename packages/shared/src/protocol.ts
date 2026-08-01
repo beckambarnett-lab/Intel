@@ -1,6 +1,28 @@
-import type { Campfire, InputFrame, Player, PlayerId } from './types.js';
+import type { Vec2 } from './math.js';
+import type { FireTier, InputFrame, Outcome, Player, PlayerId } from './types.js';
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
+
+/**
+ * What a client is told about the fire.
+ *
+ * The glow carries down the whole tube (Q13), so its tier and radius are
+ * public — that is the navigation system and hiding it would break it. The
+ * exact fuel number is not: Q127 says fire fuel is only legible when you are
+ * near the fire, so `fuel` and `emberSecLeft` are omitted unless you are close
+ * enough to read them off the flame. From 800m you can see how bright it is,
+ * not how many seconds are left.
+ */
+export interface FireView {
+  pos: Vec2;
+  tier: FireTier;
+  lightRadiusM: number;
+  safeRadiusM: number;
+  dead: boolean;
+  /** Present only within the firelight. */
+  fuel?: number;
+  emberSecLeft?: number;
+}
 
 export type ClientMsg =
   | { t: 'join'; name: string; protocol: number }
@@ -23,7 +45,7 @@ export type ServerMsg =
        * other entities are; that is what `snapshot` culls (Q122).
        */
       mapSeed: number;
-      campfire: Campfire;
+      fire: FireView;
       /**
        * Your own player, and only yours. Sending the full world here would leak
        * every spawn position before the first snapshot ever culls anything.
@@ -45,6 +67,9 @@ export type ServerMsg =
        * after it is still pending and gets replayed during reconciliation.
        */
       ack: number;
+      fire: FireView;
+      /** Non-null once the run has ended. */
+      outcome: Outcome | null;
     };
 
 export function encode(msg: ClientMsg | ServerMsg): string {

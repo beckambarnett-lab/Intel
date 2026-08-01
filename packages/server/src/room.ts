@@ -6,7 +6,7 @@ import {
   TICK_DT,
   TICK_MS,
   TICK_RATE,
-  createLantern,
+  createPlayer,
   createWorld,
   encode,
   isBlockedAt,
@@ -15,7 +15,7 @@ import {
 } from '@ember/shared';
 import type { InputFrame, Player, PlayerId, TickInputs, WorldState } from '@ember/shared';
 import type { WebSocket } from 'ws';
-import { VisibilityIndex } from './visibility.js';
+import { VisibilityIndex, fireViewFor } from './visibility.js';
 
 /**
  * Bound on how many unconsumed inputs we hold per client. One tick is consumed
@@ -76,14 +76,11 @@ export class Room {
   join(socket: WebSocket, name: string): PlayerId {
     const playerId = `p${++this.nextPlayerNumber}`;
 
-    const player: Player = {
-      id: playerId,
-      name: name.slice(0, 24) || playerId,
-      pos: this.spawnPoint(this.nextPlayerNumber - 1),
-      vel: { x: 0, y: 0 },
-      loadKg: 0,
-      lantern: createLantern(),
-    };
+    const player: Player = createPlayer(
+      playerId,
+      name.slice(0, 24) || playerId,
+      this.spawnPoint(this.nextPlayerNumber - 1),
+    );
 
     this.world.players[playerId] = player;
     this.connections.set(playerId, { socket, playerId, queue: [], ack: 0 });
@@ -99,7 +96,7 @@ export class Room {
         tick: this.world.tick,
         bounds: { ...this.world.bounds },
         mapSeed: this.mapSeed,
-        campfire: structuredClone(this.world.campfire),
+        fire: fireViewFor(this.world, playerId),
         you: structuredClone(player),
       }),
     );
@@ -113,7 +110,7 @@ export class Room {
    * lands stacked and everybody starts inside the firelight.
    */
   private spawnPoint(index: number): { x: number; y: number } {
-    const fire = this.world.campfire.pos;
+    const fire = this.world.fire.pos;
     const angle = (index * Math.PI * 2) / SPAWN_RING_SLOTS;
 
     for (let ring = 0; ring < SPAWN_RING_ATTEMPTS; ring++) {
@@ -209,6 +206,8 @@ export class Room {
           tick: this.world.tick,
           players,
           ack: conn.ack,
+          fire: fireViewFor(this.world, conn.playerId),
+          outcome: this.world.outcome,
         }),
       );
     }

@@ -1,4 +1,4 @@
-import { TICK_MS, lanternRadius } from '@ember/shared';
+import { FIRE_CAPACITY, FIRE_STOKE_SEC, TICK_MS, lanternRadius } from '@ember/shared';
 import type { LanternState } from '@ember/shared';
 import { InputSource } from './input.js';
 import { NetClient } from './net.js';
@@ -49,23 +49,24 @@ async function main(): Promise<void> {
       accumulator -= TICK_MS;
     }
 
-    if (!mapDrawn && net.playerId) {
-      stage.drawMap(net.grid, net.bounds.w, net.bounds.h, net.campfire);
+    if (!mapDrawn && net.playerId && net.fire) {
+      stage.drawMap(net.grid, net.bounds.w, net.bounds.h, net.fire.pos);
       mapDrawn = true;
     }
 
     const players = net.renderedPlayers(now);
     const me = players.find((p) => p.isLocal) ?? null;
-    stage.render(net.grid, net.campfire, players, me);
+    stage.render(net.grid, net.fire, players, me);
 
-    hud.textContent = formatHud(net.getStats(), net.lantern);
+    hud.textContent = formatHud(net);
     requestAnimationFrame(frame);
   };
 
   requestAnimationFrame(frame);
 }
 
-function formatHud(s: NetStats, lantern: LanternState | null): string {
+function formatHud(net: NetClient): string {
+  const s: NetStats = net.getStats();
   const lines = [
     `${s.connected ? 'connected' : 'DISCONNECTED'}  ${s.playerId}  visible peers ${s.peers}`,
     `tick ${s.serverTick}  ack ${s.ack}  pending ${s.pending}`,
@@ -73,13 +74,40 @@ function formatHud(s: NetStats, lantern: LanternState | null): string {
     `corrections ${s.corrections}  last ${s.lastCorrectionM.toFixed(3)}m`,
   ];
 
+  const lantern: LanternState | null = net.lantern;
   if (lantern) {
     const moving = lantern.transition > 0 ? ` -> ${lantern.target}` : '';
-    const bloom = lantern.bloom > 0 ? '  BLOOM' : '';
+    const flare = lantern.bloom > 0 ? '  BLOOM' : '';
     lines.push(
-      `lantern ${lantern.stage}${moving}  fuel ${lantern.fuel.toFixed(1)}  radius ${lanternRadius(lantern).toFixed(1)}m${bloom}`,
+      `lantern ${lantern.stage}${moving}  fuel ${lantern.fuel.toFixed(1)}  radius ${lanternRadius(lantern).toFixed(1)}m${flare}`,
     );
   }
+
+  const fire = net.fire;
+  if (fire) {
+    // fuel is only sent while you are in the firelight (Q127) — when it is
+    // absent, the tier is all you get, which is the intended experience.
+    const fuel =
+      fire.fuel !== undefined
+        ? `${fire.fuel.toFixed(0)}/${FIRE_CAPACITY}`
+        : '— (too far to read)';
+    lines.push(`fire ${fire.tier}  fuel ${fuel}  light ${fire.lightRadiusM.toFixed(1)}m`);
+
+    if (fire.emberSecLeft !== undefined && fire.fuel !== undefined && fire.fuel <= 0) {
+      lines.push(`EMBERS — ${fire.emberSecLeft.toFixed(1)}s`);
+    }
+  }
+
+  const me = net.me;
+  if (me) {
+    const channel =
+      me.stokeProgress > 0
+        ? `  stoking ${((me.stokeProgress / FIRE_STOKE_SEC) * 100).toFixed(0)}%`
+        : '';
+    lines.push(`logs ${me.carriedLogs}${channel}`);
+  }
+
+  if (net.outcome === 'embersDied') lines.push('THE EMBERS DIED — run over');
 
   return lines.join('\n');
 }

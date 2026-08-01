@@ -1,32 +1,28 @@
 import {
   LANTERN_STAGES,
   VISIBILITY_HYSTERESIS_MS,
-  createLantern,
+  createPlayer,
   createWorld,
   fillRect,
 } from '@ember/shared';
 import type { Player, PlayerId, WorldState } from '@ember/shared';
 import { describe, expect, it } from 'vitest';
-import { VisibilityIndex } from './visibility.js';
+import { VisibilityIndex, fireViewFor } from './visibility.js';
 
 const FIRE = { x: 10, y: 10 };
 const FIRE_RADIUS = 6;
 
 function world(): WorldState {
   const w = createWorld(80, 40);
-  w.campfire = { pos: { ...FIRE }, radiusM: FIRE_RADIUS };
+  w.fire.pos = { ...FIRE };
+  // Pinned rather than derived from fuel: these tests are about who can see
+  // whom at a given light radius, not about how the fire got there.
+  w.fire.lightRadiusM = FIRE_RADIUS;
   return w;
 }
 
 function addPlayer(w: WorldState, id: PlayerId, x: number, y: number): Player {
-  const p: Player = {
-    id,
-    name: id,
-    pos: { x, y },
-    vel: { x: 0, y: 0 },
-    loadKg: 0,
-    lantern: createLantern(),
-  };
+  const p = createPlayer(id, id, { x, y });
   w.players[id] = p;
   return p;
 }
@@ -143,6 +139,49 @@ describe('per-player visibility culling (Q122)', () => {
 
     expect(idsVisibleTo(index, w, 'p1')).toEqual(['p1', 'p2']);
     expect(idsVisibleTo(index, w, 'p2')).toEqual(['p2']);
+  });
+});
+
+/**
+ * The bloom is meant to be readable from the far end of the map (Q13), so tier
+ * and radius are public. The exact fuel is not — Q127 says it is only legible
+ * near the fire, and a number on the wire is a number in devtools.
+ */
+describe('what the fire tells you (Q13, Q127)', () => {
+  it('always reports tier and radius, however far away you are', () => {
+    const w = world();
+    addPlayer(w, 'p1', 75, 38); // far corner, in the dark
+
+    const view = fireViewFor(w, 'p1');
+    expect(view.tier).toBe(w.fire.tier);
+    expect(view.lightRadiusM).toBe(w.fire.lightRadiusM);
+    expect(view.pos).toEqual(w.fire.pos);
+  });
+
+  it('withholds the exact fuel and countdown from a distant player', () => {
+    const w = world();
+    addPlayer(w, 'p1', 75, 38);
+
+    const view = fireViewFor(w, 'p1');
+    expect(view.fuel).toBeUndefined();
+    expect(view.emberSecLeft).toBeUndefined();
+  });
+
+  it('reveals them once you are standing in the firelight', () => {
+    const w = world();
+    addPlayer(w, 'p1', FIRE.x + 2, FIRE.y);
+
+    const view = fireViewFor(w, 'p1');
+    expect(view.fuel).toBe(w.fire.fuel);
+    expect(view.emberSecLeft).toBe(w.fire.emberSecLeft);
+  });
+
+  it('withholds them from someone close but behind a wall', () => {
+    const w = world();
+    fillRect(w.grid, { x: FIRE.x + 2, y: 0, w: 1, h: 40 });
+    addPlayer(w, 'p1', FIRE.x + 4, FIRE.y);
+
+    expect(fireViewFor(w, 'p1').fuel).toBeUndefined();
   });
 });
 

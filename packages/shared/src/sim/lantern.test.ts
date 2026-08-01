@@ -7,21 +7,14 @@ import {
   LANTERN_TANK,
   TICK_DT,
 } from '../constants.js';
-import { createLantern, createWorld, emptyInput } from '../types.js';
+import { createPlayer, createWorld, emptyInput } from '../types.js';
 import type { InputFrame, WorldState } from '../types.js';
 import { step } from './index.js';
 import { lanternRadius } from './lantern.js';
 
 function worldWithPlayer(): WorldState {
   const world = createWorld(60, 40);
-  world.players['p1'] = {
-    id: 'p1',
-    name: 'test',
-    pos: { x: 30, y: 20 },
-    vel: { x: 0, y: 0 },
-    loadKg: 0,
-    lantern: createLantern(),
-  };
+  world.players['p1'] = createPlayer('p1', 'test', { x: 30, y: 20 });
   return world;
 }
 

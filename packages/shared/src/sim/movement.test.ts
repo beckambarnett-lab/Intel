@@ -5,22 +5,14 @@ import {
   PLAYER_WALK_SPEED,
   TICK_DT,
 } from '../constants.js';
-import { createLantern, createWorld, emptyInput } from '../types.js';
+import { createPlayer, createWorld, emptyInput } from '../types.js';
 import type { InputFrame, Player, WorldState } from '../types.js';
 import { cloneWorld, step } from './index.js';
 import { canSprint, speedMultiplierForLoad } from './movement.js';
 
 function worldWith(player: Partial<Player> = {}): WorldState {
   const world = createWorld(60, 40);
-  world.players['p1'] = {
-    id: 'p1',
-    name: 'test',
-    pos: { x: 10, y: 10 },
-    vel: { x: 0, y: 0 },
-    loadKg: 0,
-    lantern: createLantern(),
-    ...player,
-  };
+  world.players['p1'] = { ...createPlayer('p1', 'test', { x: 10, y: 10 }), ...player };
   return world;
 }
 

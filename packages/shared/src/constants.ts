@@ -98,15 +98,42 @@ export const FIRE_TIERS = [
 /** Creatures cannot cross this fraction of the fire's light radius (Q6). */
 export const FIRE_SAFE_RADIUS_FRAC = 0.7;
 
-/**
- * Step 2 only: the bonfire is a fixed light with no fuel behind it yet, so the
- * darkness has a second light source to be culled against. Step 3 deletes this
- * and derives the radius from fuel via FIRE_TIERS.
- */
-export const FIRE_STATIC_RADIUS_M = FIRE_TIERS[0].radiusM;
-
 /** Below this fuel fraction the camp perimeter fails entirely (Q7). */
 export const FIRE_PERIMETER_MIN_FRAC = 0.15;
+
+/** How often the burn rate steps up, in seconds (Q4). */
+export const FIRE_ESCALATION_PERIOD_SEC = 600;
+
+/**
+ * Light radius as a smooth curve over fuel fraction (Q5).
+ *
+ * Q5 gives one radius per tier and then says the radius interpolates smoothly,
+ * which cannot both be literally true — a smooth curve has to disagree with a
+ * flat per-tier value somewhere in the band. Each tier's stated radius is
+ * therefore anchored at the CENTRE of its band, which is the only choice that
+ * does not bias the curve toward one end, and interpolated linearly between
+ * anchors. Tiers still drive audio and VFX state as written; only the radius
+ * is continuous.
+ *
+ * Derived from FIRE_TIERS rather than restated, so retuning the tiers retunes
+ * the curve and the two cannot drift apart.
+ */
+export const FIRE_RADIUS_ANCHORS = FIRE_TIERS.map((tier, i) => {
+  const upper = i === 0 ? 1 : (FIRE_TIERS[i - 1]?.minFrac ?? 1);
+  return { frac: (tier.minFrac + upper) / 2, radiusM: tier.radiusM };
+})
+  .slice()
+  .reverse();
+
+/**
+ * Logs each player starts the run holding.
+ *
+ * Step 3 stand-in. There is no way to acquire wood until Step 4 builds
+ * chopping, the woodpile and real inventory; without a starting stock the
+ * ember scramble cannot be played at all, which is this step's gate. Delete
+ * this when items land.
+ */
+export const STARTING_LOGS = 12;
 
 // ---------------------------------------------------------------------------
 // Lantern (§6)
@@ -252,3 +279,41 @@ export const LIGHT_FALLOFF_STOPS = [
  * rectangle on OLED panels.
  */
 export const DARKNESS_FLOOR_ALPHA = 0.02;
+
+// ---------------------------------------------------------------------------
+// Horizon bloom (Q13)
+// ---------------------------------------------------------------------------
+
+/**
+ * The fire's glow seen from far away, drawn at the screen edge in the fire's
+ * direction. This is the entire navigation system — there is no minimap and no
+ * compass (Q127), so these values decide whether the game is playable at range.
+ */
+
+/** Distance at which the bloom has faded to nothing, metres. */
+export const BLOOM_MAX_RANGE_M = 900;
+
+/** Inside this distance the fire is simply on screen and the bloom is not drawn. */
+export const BLOOM_MIN_RANGE_M = 18;
+
+/** Alpha of the bloom at its brightest: close, and roaring. */
+export const BLOOM_MAX_ALPHA = 0.5;
+
+/** Size of the glow at the screen edge, as a fraction of the smaller screen axis. */
+export const BLOOM_SIZE_NEAR = 0.85;
+export const BLOOM_SIZE_FAR = 0.3;
+
+/** How far the glow's centre sits outside the screen edge, in pixels. */
+export const BLOOM_EDGE_OFFSET_PX = 40;
+
+/**
+ * Brightness by tier, multiplying the distance falloff (Q13: "brightness tied
+ * to tier"). A guttering fire is genuinely hard to find, which is the point.
+ */
+export const BLOOM_TIER_BRIGHTNESS = {
+  roaring: 1,
+  burning: 0.72,
+  low: 0.45,
+  guttering: 0.24,
+  embers: 0.1,
+} as const;

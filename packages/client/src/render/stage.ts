@@ -1,9 +1,22 @@
-import { PIXELS_PER_METRE, PLAYER_RADIUS, TILE_M, isOpaqueTile } from '@ember/shared';
-import type { Campfire, OccluderGrid } from '@ember/shared';
+import {
+  BLOOM_TIER_BRIGHTNESS,
+  PIXELS_PER_METRE,
+  PLAYER_RADIUS,
+  TILE_M,
+  isOpaqueTile,
+} from '@ember/shared';
+import type { FireView, OccluderGrid, Vec2 } from '@ember/shared';
 import { Application, Container, Graphics, Text, TextStyle } from 'pixi.js';
 import type { RenderedPlayer } from '../net.js';
+import { HorizonBloom } from './hud.js';
 import { LightField } from './lighting.js';
 import type { Light } from './lighting.js';
+
+/** How bright the flame sprite itself looks, by tier. */
+function fireBodyAlpha(fire: FireView): number {
+  if (fire.dead) return 0.15;
+  return BLOOM_TIER_BRIGHTNESS[fire.tier];
+}
 
 const COLOUR = {
   ground: 0x14141a,
@@ -33,6 +46,7 @@ export class Stage {
   private fire = new Graphics();
   private bodies = new Container();
   private lights = new LightField();
+  private bloom = new HorizonBloom();
   private sprites = new Map<string, { holder: Container }>();
   private labelStyle!: TextStyle;
 
@@ -63,6 +77,10 @@ export class Stage {
     this.app.stage.addChild(this.world);
     this.app.stage.addChild(this.lights.container);
     this.world.mask = this.lights.container;
+
+    // Above the mask and in screen space: the bloom is glow in the air over the
+    // treeline, not a lit surface, so it is not subject to line of sight.
+    this.app.stage.addChild(this.bloom.container);
   }
 
   /**
@@ -72,7 +90,7 @@ export class Stage {
    * cheaper than rebuilding geometry per frame, and none of it reaches the
    * screen unless a light polygon reveals it.
    */
-  drawMap(grid: OccluderGrid, widthM: number, heightM: number, campfire: Campfire): void {
+  drawMap(grid: OccluderGrid, widthM: number, heightM: number, firePos: Vec2): void {
     const w = widthM * PIXELS_PER_METRE;
     const h = heightM * PIXELS_PER_METRE;
 
@@ -106,17 +124,13 @@ export class Stage {
 
     this.fire.clear();
     this.fire
-      .circle(
-        campfire.pos.x * PIXELS_PER_METRE,
-        campfire.pos.y * PIXELS_PER_METRE,
-        0.6 * PIXELS_PER_METRE,
-      )
+      .circle(firePos.x * PIXELS_PER_METRE, firePos.y * PIXELS_PER_METRE, 0.6 * PIXELS_PER_METRE)
       .fill(COLOUR.fire);
   }
 
   render(
     grid: OccluderGrid,
-    campfire: Campfire,
+    fire: FireView | null,
     players: RenderedPlayer[],
     cameraTargetM: { x: number; y: number } | null,
   ): void {
@@ -157,11 +171,18 @@ export class Stage {
 
     // Every visible lantern plus the bonfire. Anyone whose light should not be
     // contributing is already absent from `players` — the server culled them.
-    const lights: Light[] = [{ pos: campfire.pos, radiusM: campfire.radiusM }];
+    const lights: Light[] = [];
+    if (fire) lights.push({ pos: fire.pos, radiusM: fire.lightRadiusM });
     for (const p of players) {
       lights.push({ pos: { x: p.x, y: p.y }, radiusM: p.lightRadiusM });
     }
     this.lights.update(grid, lights);
+
+    // The fire's own body dims as it dies, so a guttering fire is a coal rather
+    // than a flame even before you read the tier.
+    this.fire.alpha = fire ? fireBodyAlpha(fire) : 1;
+
+    this.bloom.update(fire, cameraTargetM, this.app.screen);
 
     if (cameraTargetM) {
       const x = this.app.screen.width / 2 - cameraTargetM.x * PIXELS_PER_METRE;

@@ -11,11 +11,12 @@ import {
   step,
 } from '@ember/shared';
 import type {
-  Campfire,
   ClientMsg,
+  FireView,
   InputFrame,
   LanternState,
   OccluderGrid,
+  Outcome,
   Player,
   PlayerId,
   ServerMsg,
@@ -76,6 +77,10 @@ export interface NetStats {
 export class NetClient {
   playerId: PlayerId | null = null;
   connected = false;
+  /** Null once the run has ended. */
+  outcome: Outcome | null = null;
+
+  private fireView: FireView | null = null;
 
   private socket: WebSocket | null = null;
   private url: string;
@@ -182,14 +187,15 @@ export class NetClient {
     switch (msg.t) {
       case 'welcome': {
         this.playerId = msg.playerId;
+        this.fireView = msg.fire;
 
         // Rebuild the map from the seed with the same shared code the server
         // ran. Prediction collides against this grid, so it has to be the same
         // geometry byte for byte — deriving it beats shipping it.
         this.predicted = createWorld(msg.bounds.w, msg.bounds.h, sandboxGrid(msg.mapSeed));
-        this.predicted.campfire = structuredClone(msg.campfire);
         this.predicted.players[msg.playerId] = structuredClone(msg.you);
         this.predicted.tick = msg.tick;
+        this.applyFireView(msg.fire);
         break;
       }
 
@@ -210,6 +216,8 @@ export class NetClient {
         }
 
         this.reconcile(msg.players, msg.ack);
+        this.applyFireView(msg.fire);
+        this.outcome = msg.outcome;
         this.stats.serverTick = msg.tick;
         this.stats.ack = msg.ack;
 
@@ -339,14 +347,45 @@ export class NetClient {
     return this.predicted.grid;
   }
 
-  get campfire(): Campfire {
-    return this.predicted.campfire;
-  }
 
   /** The local lantern, for the debug HUD. */
   get lantern(): LanternState | null {
     const id = this.playerId;
     return id ? (this.predicted.players[id]?.lantern ?? null) : null;
+  }
+
+  /** The local player, for the debug HUD. */
+  get me(): Player | null {
+    const id = this.playerId;
+    return id ? (this.predicted.players[id] ?? null) : null;
+  }
+
+  /** The fire as the server last described it, not as we predicted it. */
+  get fire(): FireView | null {
+    return this.fireView;
+  }
+
+  /**
+   * The fire is authoritative, never predicted.
+   *
+   * `step()` does run the fire stage on our predicted world — client and server
+   * must run the identical tick — but its burn rate scales with player count
+   * (Q3), and we deliberately do not know how many players there are. So the
+   * prediction is discarded and the server's view wins, exactly as it does for
+   * our own position.
+   */
+  private applyFireView(view: FireView): void {
+    this.fireView = view;
+
+    const f = this.predicted.fire;
+    f.pos = { ...view.pos };
+    f.tier = view.tier;
+    f.lightRadiusM = view.lightRadiusM;
+    f.safeRadiusM = view.safeRadiusM;
+    f.dead = view.dead;
+    // Only sent when we are close enough to read them (Q127).
+    if (view.fuel !== undefined) f.fuel = view.fuel;
+    if (view.emberSecLeft !== undefined) f.emberSecLeft = view.emberSecLeft;
   }
 
   getStats(): NetStats {

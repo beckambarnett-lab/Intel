@@ -1,5 +1,33 @@
 import { VISIBILITY_HYSTERESIS_MS, canSee, lanternRadius } from '@ember/shared';
-import type { Player, PlayerId, WorldState } from '@ember/shared';
+import type { FireView, Player, PlayerId, WorldState } from '@ember/shared';
+
+/**
+ * The fire as this player may see it.
+ *
+ * Tier and radius always: the horizon bloom is meant to be readable from the
+ * far end of the map (Q13), and it is the only navigation aid in the game.
+ * The exact fuel and the ember countdown only when they are standing in the
+ * firelight, per Q127 — knowing the fire has 41 seconds left is not something
+ * you should be able to read from 800m away.
+ */
+export function fireViewFor(world: WorldState, viewerId: PlayerId): FireView {
+  const f = world.fire;
+  const view: FireView = {
+    pos: { ...f.pos },
+    tier: f.tier,
+    lightRadiusM: f.lightRadiusM,
+    safeRadiusM: f.safeRadiusM,
+    dead: f.dead,
+  };
+
+  const viewer = world.players[viewerId];
+  if (viewer && canSee(world.grid, f.pos, f.lightRadiusM, viewer.pos)) {
+    view.fuel = f.fuel;
+    view.emberSecLeft = f.emberSecLeft;
+  }
+
+  return view;
+}
 
 /**
  * Per-player visibility culling — the anti-cheat spine (Q122).
@@ -75,9 +103,9 @@ export class VisibilityIndex {
   ): boolean {
     if (canSee(world.grid, viewer.pos, lanternRadiusM, target.pos)) return true;
 
-    const fire = world.campfire;
+    const fire = world.fire;
     return (
-      canSee(world.grid, fire.pos, fire.radiusM, target.pos) &&
+      canSee(world.grid, fire.pos, fire.lightRadiusM, target.pos) &&
       // Unbounded viewer distance is intentional: a lit figure across open
       // ground is genuinely visible, and that is a real tactical fact about
       // standing in the firelight.
