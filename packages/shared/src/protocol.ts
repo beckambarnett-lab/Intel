@@ -1,3 +1,4 @@
+import type { MapKind } from './grid.js';
 import type { Vec2 } from './math.js';
 import type {
   Carrying,
@@ -53,6 +54,14 @@ export type ServerMsg =
        * other entities are; that is what `snapshot` culls (Q122).
        */
       mapSeed: number;
+      /**
+       * Which generator built the world. The seed alone is not enough — the
+       * client rebuilds geometry locally for prediction and lighting, and if it
+       * picks a different generator it will disagree with the server about
+       * collision. That shows up as constant reconciliation corrections rather
+       * than as an obvious error.
+       */
+      mapKind: MapKind;
       fire: FireView;
       /**
        * Your own player, and only yours. Sending the full world here would leak

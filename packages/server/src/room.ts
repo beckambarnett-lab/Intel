@@ -3,6 +3,9 @@ import {
   SANDBOX_HEIGHT_M,
   SANDBOX_MAP_SEED,
   SANDBOX_WIDTH_M,
+  TUBE_MAP_SEED,
+  WORLD_LENGTH_M,
+  WORLD_WIDTH_M,
   TICK_DT,
   TICK_MS,
   TICK_RATE,
@@ -18,6 +21,7 @@ import {
   populateFromMap,
   refreshFire,
   sandboxMap,
+  tubeMap,
   step,
 } from '@ember/shared';
 import type {
@@ -29,6 +33,8 @@ import type {
   WorldState,
 } from '@ember/shared';
 import type { WebSocket } from 'ws';
+import type { MapKind } from '@ember/shared';
+import { tubeCampPos } from '@ember/shared';
 import { VisibilityIndex, fireViewFor } from './visibility.js';
 
 /**
@@ -65,12 +71,24 @@ export class Room {
   private nextTickAt = 0;
   private visibility = new VisibilityIndex();
   private readonly mapSeed: number;
+  private readonly mapKind: MapKind;
 
-  constructor(mapSeed?: number) {
-    this.mapSeed = mapSeed ?? SANDBOX_MAP_SEED;
+  /**
+   * @param mapSeed  world seed; clients rebuild identical geometry from it
+   * @param mapKind  'tube' is the real map. 'sandbox' is the small Step 1
+   *                 rectangle, kept for tests — asserting that two clients can
+   *                 see each other does not need 1200m of forest, and building
+   *                 one per test case is slow enough to matter.
+   */
+  constructor(mapSeed?: number, mapKind: MapKind = 'tube') {
+    this.mapSeed = mapSeed ?? (mapKind === 'tube' ? TUBE_MAP_SEED : SANDBOX_MAP_SEED);
+    this.mapKind = mapKind;
     const seed = this.mapSeed;
-    const map = sandboxMap(seed);
-    this.world = createWorld(SANDBOX_WIDTH_M, SANDBOX_HEIGHT_M, gridFromMap(map));
+    const map = mapKind === 'tube' ? tubeMap(seed) : sandboxMap(seed);
+    this.world =
+      mapKind === 'tube'
+        ? createWorld(WORLD_LENGTH_M, WORLD_WIDTH_M, gridFromMap(map), tubeCampPos())
+        : createWorld(SANDBOX_WIDTH_M, SANDBOX_HEIGHT_M, gridFromMap(map));
     populateFromMap(this.world, map);
     refreshFire(this.world.fire);
   }
@@ -113,6 +131,7 @@ export class Room {
         tick: this.world.tick,
         bounds: { ...this.world.bounds },
         mapSeed: this.mapSeed,
+        mapKind: this.mapKind,
         fire: fireViewFor(this.world, playerId),
         you: structuredClone(player),
       }),
@@ -159,7 +178,7 @@ export class Room {
    * or each run would inherit the last one's clearcut.
    */
   private resetRun(): void {
-    const map = sandboxMap(this.mapSeed);
+    const map = tubeMap(this.mapSeed);
     this.world.grid = gridFromMap(map);
     this.world.trees = {};
     this.world.items = {};

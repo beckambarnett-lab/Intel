@@ -150,7 +150,7 @@ const LANE_SEED = findClearLaneSeed();
  * connected sockets that break the next one.
  */
 beforeEach(async () => {
-  server = createServer(0, LANE_SEED);
+  server = createServer(0, LANE_SEED, 'sandbox');
   await server.ready;
   PORT = server.port;
 });

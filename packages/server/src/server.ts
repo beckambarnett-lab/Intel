@@ -2,6 +2,7 @@ import { PROTOCOL_VERSION, decode, encode } from '@ember/shared';
 import type { ClientMsg, PlayerId } from '@ember/shared';
 import { WebSocketServer } from 'ws';
 import { Room } from './room.js';
+import type { MapKind } from '@ember/shared';
 
 export interface EmberServer {
   room: Room;
@@ -18,8 +19,12 @@ export interface EmberServer {
  * stand up a real server on an ephemeral port and drive it with real clients —
  * netcode that is only ever tested by hand is netcode that breaks silently.
  */
-export function createServer(port: number, mapSeed?: number): EmberServer {
-  const room = new Room(mapSeed);
+export function createServer(
+  port: number,
+  mapSeed?: number,
+  mapKind: MapKind = 'tube',
+): EmberServer {
+  const room = new Room(mapSeed, mapKind);
   room.start();
 
   const wss = new WebSocketServer({ port });

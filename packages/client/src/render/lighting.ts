@@ -1,32 +1,33 @@
-import {
-  DARKNESS_FLOOR_ALPHA,
-  LIGHT_FALLOFF_STOPS,
-  LIGHT_GRADIENT_PX,
-  PIXELS_PER_METRE,
-  visibilityPolygon,
-} from '@ember/shared';
+import { LIGHT_FALLOFF_STOPS, LIGHT_GRADIENT_PX, PIXELS_PER_METRE, visibilityPolygon } from '@ember/shared';
 import type { OccluderGrid, Vec2 } from '@ember/shared';
 import { Container, Graphics, Sprite, Texture } from 'pixi.js';
 
 export interface Light {
   pos: Vec2;
   radiusM: number;
+  /** Emitted colour. Temperature separation is what makes two lights read as real (§24.4). */
+  colour: number;
+  /** Multiplier on the falloff. Above 1 the core blows past white before tone-mapping pulls it back. */
+  intensity: number;
 }
 
 /**
- * The darkness.
+ * The light buffer (§24.2, stages 3 and 4).
  *
- * Every light contributes a radial falloff sprite clipped to its own visibility
- * polygon; they accumulate into one container which is then used as the mask
- * for the whole world. What is not lit is not drawn — so the screen genuinely
- * goes black when you hood the lantern rather than merely getting dimmer.
+ * Each light contributes a coloured radial falloff clipped to its own visibility
+ * polygon, accumulating additively. This container is rendered to its own
+ * texture and multiplied over the world by the composite pass — it is NOT a
+ * mask and must never be added to the visible scene graph.
  *
- * The polygon is geometry, the gradient is falloff, and they are separate on
- * purpose: the polygon decides *whether* a spot is lit (that is line of sight,
- * and it must be crisp at shadow edges), the gradient decides *how brightly*.
+ * That distinction is the fix for the white fire: as a mask, light could only be
+ * white and the mask itself was being drawn over the world, so the screen showed
+ * the light field instead of the lit world.
+ *
+ * Polygon and gradient stay separate on purpose: the polygon decides *whether* a
+ * spot is lit, which is line of sight and must stay crisp at shadow edges; the
+ * gradient decides *how brightly*, which must not.
  */
 export class LightField {
-  /** Masked over the world container. Lives in world space, like the world. */
   readonly container = new Container();
 
   private gradient: Texture;
@@ -37,8 +38,6 @@ export class LightField {
   }
 
   /**
-   * Rebuild the mask for this frame.
-   *
    * Sprites are pooled rather than recreated: at 20+ lights and 60fps, churning
    * Graphics objects every frame is the difference between smooth and not.
    */
@@ -46,7 +45,7 @@ export class LightField {
     let used = 0;
 
     for (const light of lights) {
-      if (light.radiusM <= 0) continue;
+      if (light.radiusM <= 0 || light.intensity <= 0) continue;
 
       const entry = this.acquire(used++);
       const poly = visibilityPolygon(grid, light.pos, light.radiusM);
@@ -62,12 +61,13 @@ export class LightField {
       entry.glow.height = diameter;
       entry.glow.x = light.pos.x * PIXELS_PER_METRE;
       entry.glow.y = light.pos.y * PIXELS_PER_METRE;
+      entry.glow.tint = light.colour;
+      // Alpha carries intensity; the tone-map absorbs anything over 1.
+      entry.glow.alpha = Math.min(light.intensity, 1);
 
       entry.holder.visible = true;
     }
 
-    // Park the surplus rather than destroying it — light counts fluctuate every
-    // time somebody walks in or out of view.
     for (let i = used; i < this.pool.length; i++) {
       const entry = this.pool[i];
       if (entry) entry.holder.visible = false;
@@ -113,10 +113,10 @@ interface LightSprite {
 }
 
 /**
- * The falloff profile, baked once into a texture.
+ * The falloff profile, baked once into a white texture and tinted per light.
  *
- * A canvas gradient rather than a shader because this is a static lookup that
- * never changes — the shader budget belongs to Step 5's memory rot.
+ * White rather than pre-coloured so one texture serves every source; the tint
+ * is what gives the fire and the lantern different temperatures.
  */
 function makeRadialGradientTexture(): Texture {
   const size = LIGHT_GRADIENT_PX;
@@ -132,11 +132,6 @@ function makeRadialGradientTexture(): Texture {
   for (const stop of LIGHT_FALLOFF_STOPS) {
     grad.addColorStop(stop.at, `rgba(255,255,255,${stop.alpha})`);
   }
-
-  // A hair of light everywhere keeps unlit ground from being a dead black
-  // rectangle; it is far too dim to read anything by.
-  ctx.fillStyle = `rgba(255,255,255,${DARKNESS_FLOOR_ALPHA})`;
-  ctx.fillRect(0, 0, size, size);
 
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, size, size);

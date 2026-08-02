@@ -1,4 +1,9 @@
-import { VISIBILITY_HYSTERESIS_MS, canSee, lanternRadius } from '@ember/shared';
+import {
+  LIT_FIGURE_VISIBLE_M,
+  VISIBILITY_HYSTERESIS_MS,
+  canSee,
+  lanternRadius,
+} from '@ember/shared';
 import type { FireView, Player, PlayerId, WorldItem, WorldState } from '@ember/shared';
 
 /**
@@ -106,10 +111,11 @@ export class VisibilityIndex {
     const fire = world.fire;
     return (
       canSee(world.grid, fire.pos, fire.lightRadiusM, target.pos) &&
-      // Unbounded viewer distance is intentional: a lit figure across open
-      // ground is genuinely visible, and that is a real tactical fact about
-      // standing in the firelight.
-      canSee(world.grid, viewer.pos, Infinity, target.pos)
+      // A lit figure across open ground is genuinely visible — that is a real
+      // tactical fact about standing in the firelight — but only out to the
+      // range a person can actually be made out (Q45), not forever down the
+      // length of the tube.
+      canSee(world.grid, viewer.pos, LIT_FIGURE_VISIBLE_M, target.pos)
     );
   }
 
@@ -137,7 +143,7 @@ export class VisibilityIndex {
       const lit =
         canSee(world.grid, viewer.pos, lantern, item.pos) ||
         (canSee(world.grid, fire.pos, fire.lightRadiusM, item.pos) &&
-          canSee(world.grid, viewer.pos, Infinity, item.pos));
+          canSee(world.grid, viewer.pos, LIT_FIGURE_VISIBLE_M, item.pos));
 
       if (lit) {
         this.lastSeenAt.set(key, nowMs);
@@ -178,7 +184,7 @@ export class VisibilityIndex {
       const lit =
         canSee(world.grid, viewer.pos, lantern, tree.pos) ||
         (canSee(world.grid, fire.pos, fire.lightRadiusM, tree.pos) &&
-          canSee(world.grid, viewer.pos, Infinity, tree.pos));
+          canSee(world.grid, viewer.pos, LIT_FIGURE_VISIBLE_M, tree.pos));
 
       if (lit) out.push({ x: tree.tx, y: tree.ty });
     }

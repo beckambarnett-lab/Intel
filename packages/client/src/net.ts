@@ -9,7 +9,7 @@ import {
   gridFromMap,
   isOpaqueTile,
   lanternRadius,
-  sandboxMap,
+  mapFor,
   setTile,
   step,
 } from '@ember/shared';
@@ -209,7 +209,7 @@ export class NetClient {
         // Rebuild the map from the seed with the same shared code the server
         // ran. Prediction collides against this grid, so it has to be the same
         // geometry byte for byte — deriving it beats shipping it.
-        this.predicted = createWorld(msg.bounds.w, msg.bounds.h, gridFromMap(sandboxMap(msg.mapSeed)));
+        this.predicted = createWorld(msg.bounds.w, msg.bounds.h, gridFromMap(mapFor(msg.mapKind, msg.mapSeed)));
         this.predicted.players[msg.playerId] = structuredClone(msg.you);
         this.predicted.tick = msg.tick;
         this.applyFireView(msg.fire);

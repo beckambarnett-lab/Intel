@@ -319,13 +319,26 @@ export type TickInputs = Record<PlayerId, InputFrame | undefined>;
  * grid built from a map definition; the default is open ground, which keeps
  * movement tests independent of whatever the sandbox map happens to look like.
  */
-export function createWorld(w: number, h: number, grid?: OccluderGrid): WorldState {
+export function createWorld(
+  w: number,
+  h: number,
+  grid?: OccluderGrid,
+  campPos?: { x: number; y: number },
+): WorldState {
+  // Camp defaults to the sandbox position so movement and economy tests need no
+  // knowledge of whichever map the room happens to be running.
+  const fire = createFire();
+  if (campPos) fire.pos = { x: campPos.x, y: campPos.y };
+  const woodpilePos = campPos
+    ? { x: campPos.x + (SANDBOX_WOODPILE_POS.x - SANDBOX_FIRE_POS.x), y: campPos.y + (SANDBOX_WOODPILE_POS.y - SANDBOX_FIRE_POS.y) }
+    : { ...SANDBOX_WOODPILE_POS };
+
   return {
     tick: 0,
     bounds: { w, h },
     grid: grid ?? createGrid(Math.ceil(w / TILE_M), Math.ceil(h / TILE_M)),
-    fire: createFire(),
-    woodpile: { pos: { ...SANDBOX_WOODPILE_POS }, contents: emptyCarrying() },
+    fire,
+    woodpile: { pos: woodpilePos, contents: emptyCarrying() },
     players: {},
     items: {},
     trees: {},

@@ -351,3 +351,151 @@ export const BLOOM_TIER_BRIGHTNESS = {
   guttering: 0.24,
   embers: 0.1,
 } as const;
+
+// ---------------------------------------------------------------------------
+// Light colour and response (§24.4)
+//
+// Colour temperature separation is what makes two light sources read as
+// physically real rather than as two copies of the same white circle. The fire
+// is warm and shifts cooler and dimmer as it dies; the lantern is paler and
+// flatter, so a lantern in the distance never reads as a campfire.
+// ---------------------------------------------------------------------------
+
+/** Emitted colour per fire tier. Warmth drops with the fuel. */
+export const FIRE_LIGHT_COLOUR = {
+  roaring: 0xff9d4d,
+  burning: 0xff8a33,
+  low: 0xf06f1f,
+  guttering: 0xd4551a,
+  embers: 0x8f3410,
+} as const;
+
+/** Light intensity per tier, before tone-mapping. Over 1 is deliberate. */
+export const FIRE_LIGHT_INTENSITY = {
+  roaring: 1.0,
+  burning: 0.88,
+  low: 0.72,
+  guttering: 0.55,
+  embers: 0.35,
+} as const;
+
+/** The flame body itself, drawn into the albedo so the fire reads as a shape. */
+export const FIRE_CORE_COLOUR = {
+  roaring: 0xffd9a0,
+  burning: 0xffc27a,
+  low: 0xffa855,
+  guttering: 0xe8813a,
+  embers: 0xb35520,
+} as const;
+
+/** Flame body radius in metres per tier — the fire visibly shrinks as it dies. */
+export const FIRE_CORE_RADIUS_M = {
+  roaring: 0.85,
+  burning: 0.7,
+  low: 0.55,
+  guttering: 0.4,
+  embers: 0.28,
+} as const;
+
+/** Flicker depth and speed. Subtle — a strobing fire reads as a bug. */
+export const FIRE_FLICKER_AMPLITUDE = 0.06;
+export const FIRE_FLICKER_HZ = 7.3;
+
+/** The lantern: paler and cooler than any fire tier. */
+export const LANTERN_LIGHT_COLOUR = 0xffe3b8;
+export const LANTERN_LIGHT_INTENSITY = 0.85;
+export const LANTERN_FLICKER_AMPLITUDE = 0.025;
+export const LANTERN_FLICKER_HZ = 5.1;
+
+/** Filmic rolloff strength in the composite pass. Higher lifts the midtones. */
+export const COMPOSITE_EXPOSURE = 2.1;
+
+/** Ambient floor so unlit ground has texture rather than being a void. */
+export const COMPOSITE_AMBIENT = 0.018;
+
+// ---------------------------------------------------------------------------
+// Horizon bloom gating (§21 Step 4A.2)
+//
+// The bloom exists to point you home when you cannot see camp (Q13). Showing it
+// while the fire is on screen is noise, and trains players to ignore the one
+// navigation aid the game has. Gate on the viewport, not on a fixed distance.
+// ---------------------------------------------------------------------------
+
+/** Extra margin past the screen edge before the bloom is allowed to appear, in metres. */
+export const BLOOM_OFFSCREEN_MARGIN_M = 6;
+
+/** Fade in/out seconds, so it does not pop as the fire crosses the screen edge. */
+export const BLOOM_FADE_SEC = 0.5;
+
+// ---------------------------------------------------------------------------
+// The tube (§14, Q105-Q109) — the real map
+//
+// Camp at one end, the lair at the other. The sandbox above is kept only for
+// tests: a 1200m map to assert that two clients can see each other is waste.
+// ---------------------------------------------------------------------------
+
+/** Camp sits this far in from the near end. */
+export const TUBE_CAMP_X = 40;
+
+/** Zone boundaries along the tube's length, in metres (Q106). */
+export const TUBE_ZONES = [
+  { name: 'camp', from: 0, to: 150 },
+  { name: 'nearWood', from: 150, to: 400 },
+  { name: 'ruins', from: 400, to: 700 },
+  { name: 'deepWood', from: 700, to: 1000 },
+  { name: 'lair', from: 1000, to: 1200 },
+] as const;
+
+export type ZoneName = (typeof TUBE_ZONES)[number]['name'];
+
+/**
+ * Trees per 1000m² by zone.
+ *
+ * Rising with distance is deliberate (Q18/§14): the near wood is thin to begin
+ * with and strips out fast, so the pressure to range further is structural
+ * rather than scripted. Nothing respawns.
+ */
+export const TUBE_TREE_DENSITY: Record<ZoneName, number> = {
+  camp: 3,
+  nearWood: 7,
+  ruins: 4,
+  deepWood: 11,
+  lair: 8,
+};
+
+/** Deadfall per 1000m² by zone. Richest near camp — the calm opening minutes. */
+export const TUBE_DEADFALL_DENSITY: Record<ZoneName, number> = {
+  camp: 6,
+  nearWood: 4,
+  ruins: 2,
+  deepWood: 2,
+  lair: 1,
+};
+
+/** Rock blocks per zone. Hard cover is what makes going dark survivable. */
+export const TUBE_ROCK_COUNT: Record<ZoneName, number> = {
+  camp: 4,
+  nearWood: 10,
+  ruins: 26,
+  deepWood: 14,
+  lair: 12,
+};
+
+/** Cliff thickness bounding the tube's long sides (Q105). */
+export const TUBE_CLIFF_M = 3;
+
+/** Walkable clearing kept around camp so the opening is not a thicket. */
+export const TUBE_CAMP_CLEARING_M = 11;
+
+export const TUBE_MAP_SEED = 0x1337;
+
+/**
+ * How far a figure standing in firelight can be made out across open ground.
+ *
+ * Previously unbounded, which was defensible on a 60m sandbox where trees broke
+ * every long sightline. On the 1200m tube it meant a lit player was visible from
+ * arbitrarily far away down an open corridor, which both leaks position and
+ * contradicts Q45's "at full detection range". Generous enough that standing in
+ * the firelight is still a real tactical fact.
+ */
+export const LIT_FIGURE_VISIBLE_M = 70;

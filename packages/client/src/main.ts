@@ -67,7 +67,9 @@ async function main(): Promise<void> {
 
     const players = net.renderedPlayers(now);
     const me = players.find((p) => p.isLocal) ?? null;
-    stage.render(net.grid, net.fire, players, net.visibleItems, me);
+    // Real elapsed time, not the fixed sim step: flicker and the bloom fade are
+    // presentation and should run at display rate rather than at 20Hz.
+    stage.render(net.grid, net.fire, players, net.visibleItems, me, elapsed / 1000);
 
     hud.textContent = formatHud(net);
     requestAnimationFrame(frame);
