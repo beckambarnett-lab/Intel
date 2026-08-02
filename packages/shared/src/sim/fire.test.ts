@@ -91,16 +91,16 @@ describe('burn rate (Q1-Q4)', () => {
   it('steps up 10% at each ten-minute mark (Q4)', () => {
     const world = worldWith(1);
 
-    world.tick = Math.floor((FIRE_ESCALATION_PERIOD_SEC - 1) / TICK_DT);
+    world.runSec = FIRE_ESCALATION_PERIOD_SEC - 1;
     expect(burnRatePerSec(world)).toBeCloseTo(FIRE_BASE_BURN_PER_SEC, 9);
 
-    world.tick = Math.ceil(FIRE_ESCALATION_PERIOD_SEC / TICK_DT);
+    world.runSec = FIRE_ESCALATION_PERIOD_SEC;
     expect(burnRatePerSec(world)).toBeCloseTo(
       FIRE_BASE_BURN_PER_SEC * (1 + FIRE_ESCALATION_PER_10_MIN),
       9,
     );
 
-    world.tick = Math.ceil((FIRE_ESCALATION_PERIOD_SEC * 3) / TICK_DT);
+    world.runSec = FIRE_ESCALATION_PERIOD_SEC * 3;
     expect(burnRatePerSec(world)).toBeCloseTo(
       FIRE_BASE_BURN_PER_SEC * (1 + FIRE_ESCALATION_PER_10_MIN * 3),
       9,
@@ -111,6 +111,48 @@ describe('burn rate (Q1-Q4)', () => {
     const world = worldWith(4);
     run(world, 60 * 6);
     expect(world.fire.fuel).toBe(0);
+  });
+});
+
+/**
+ * The room starts ticking when the server process boots, which on a dev server
+ * is long before anyone opens a tab. If the fire burned during that, you would
+ * arrive to a run that had already been lost — which is exactly what happened.
+ * There is no run until somebody is in the camp (Q124: no drop-in).
+ */
+describe('an empty camp has no clock', () => {
+  it('does not burn a single unit of fuel with nobody connected', () => {
+    const world = worldWith(0);
+    run(world, 10 * 60);
+
+    expect(world.fire.fuel).toBe(FIRE_CAPACITY);
+    expect(world.fire.dead).toBe(false);
+    expect(world.outcome).toBeNull();
+  });
+
+  it('does not run the ember countdown either', () => {
+    const world = worldWith(0);
+    world.fire.fuel = 0;
+
+    run(world, FIRE_EMBER_GRACE_SEC * 2);
+
+    expect(world.fire.emberSecLeft).toBe(FIRE_EMBER_GRACE_SEC);
+    expect(world.outcome).toBeNull();
+  });
+
+  it('does not bank escalation while the server idles', () => {
+    const world = worldWith(0);
+    run(world, FIRE_ESCALATION_PERIOD_SEC * 3);
+
+    // Someone finally joins: they should get a fresh run at the base rate.
+    world.players['p1'] = createPlayer('p1', 'p1', { x: 40, y: 30 });
+    expect(burnRatePerSec(world)).toBeCloseTo(FIRE_BASE_BURN_PER_SEC, 9);
+  });
+
+  it('still lights the camp, so you do not arrive to a black screen', () => {
+    const world = worldWith(0);
+    run(world, 60);
+    expect(world.fire.lightRadiusM).toBeGreaterThan(0);
   });
 });
 

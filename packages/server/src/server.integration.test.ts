@@ -1,4 +1,5 @@
 import {
+  FIRE_CAPACITY,
   PROTOCOL_VERSION,
   TICK_MS,
   decode,
@@ -234,6 +235,48 @@ describe('server end to end', () => {
     b.close();
     await waitFor(() => server.room.playerCount === 0);
   }, 30000);
+
+  /**
+   * The dev-server trap: the room ticks from process boot, so without this the
+   * fire burns down while nobody is connected and you join a run that is
+   * already over. Reported from a real session — the fire was dead on arrival.
+   */
+  it('gives a joining player a full fire, however long the server has been up', async () => {
+    // Idle for well past the five minutes a full fire would last.
+    await sleep(500);
+
+    const a = new TestClient('alice');
+    await a.ready();
+    await waitFor(() => a.snapshots.length > 2);
+
+    expect(a.welcome!.fire.fuel).toBe(FIRE_CAPACITY);
+    expect(a.welcome!.fire.dead).toBe(false);
+    expect(a.latest!.outcome).toBeNull();
+
+    a.close();
+    await waitFor(() => server.room.playerCount === 0);
+  }, 20000);
+
+  it('resets the run once the last player leaves', async () => {
+    const a = new TestClient('alice');
+    await a.ready();
+    await waitFor(() => a.snapshots.length > 3);
+
+    // Burn a little, then leave.
+    await sleep(600);
+    expect(server.room.state.fire.fuel).toBeLessThan(FIRE_CAPACITY);
+
+    a.close();
+    await waitFor(() => server.room.playerCount === 0);
+
+    // The next player finds a fresh camp, not the last one's leftovers.
+    const b = new TestClient('bob');
+    await b.ready();
+    expect(b.welcome!.fire.fuel).toBe(FIRE_CAPACITY);
+
+    b.close();
+    await waitFor(() => server.room.playerCount === 0);
+  }, 20000);
 
   it('does not leak other players in the welcome message', async () => {
     const a = new TestClient('alice');

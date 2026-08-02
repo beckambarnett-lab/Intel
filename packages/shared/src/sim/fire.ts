@@ -97,7 +97,17 @@ export function safeRadiusFor(frac: number, lightRadiusM: number): number {
   return lightRadiusM * FIRE_SAFE_RADIUS_FRAC;
 }
 
-/** Recompute everything derived from fuel. */
+/**
+ * Recompute everything derived from fuel.
+ *
+ * Exported because a freshly created fire has no radius until something works
+ * it out, and anything that reads the fire before the next tick — a player
+ * joining between ticks, for one — would see an unlit camp.
+ */
+export function refreshFire(fire: Fire): void {
+  refresh(fire);
+}
+
 function refresh(fire: Fire): void {
   const frac = fuelFraction(fire);
   fire.tier = tierForFraction(frac);
@@ -120,6 +130,17 @@ export function fire(world: WorldState, dt: number): void {
     refresh(f);
     return;
   }
+
+  // No players, no run. The room ticks from the moment the server process
+  // starts, which is typically long before anyone connects; burning through
+  // that would mean joining a run that had already been lost. The camp keeps
+  // its light — it just does not consume anything.
+  if (Object.keys(world.players).length === 0) {
+    refresh(f);
+    return;
+  }
+
+  world.runSec += dt;
 
   if (f.fuel > 0) {
     f.fuel = Math.max(0, f.fuel - burnRatePerSec(world) * dt);

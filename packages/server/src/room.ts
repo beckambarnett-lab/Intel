@@ -6,10 +6,12 @@ import {
   TICK_DT,
   TICK_MS,
   TICK_RATE,
+  createFire,
   createPlayer,
   createWorld,
   encode,
   isBlockedAt,
+  refreshFire,
   sandboxGrid,
   step,
 } from '@ember/shared';
@@ -56,6 +58,7 @@ export class Room {
     this.mapSeed = mapSeed ?? SANDBOX_MAP_SEED;
     const seed = this.mapSeed;
     this.world = createWorld(SANDBOX_WIDTH_M, SANDBOX_HEIGHT_M, sandboxGrid(seed));
+    refreshFire(this.world.fire);
   }
 
   start(): void {
@@ -127,6 +130,22 @@ export class Room {
     delete this.world.players[playerId];
     this.visibility.forget(playerId);
     console.log(`[room] ${playerId} left (${this.connections.size} online)`);
+
+    // The last person out ends the run. There is no drop-in (Q124), so a
+    // half-burned fire left over from whoever was here before is not a state
+    // anyone should be able to join into — the next player gets a fresh camp.
+    if (this.connections.size === 0) this.resetRun();
+  }
+
+  /** Back to a full fire and a zeroed clock. The map is untouched. */
+  private resetRun(): void {
+    this.world.fire = createFire();
+    // Derive tier and radii now rather than on the next tick — someone can
+    // join in between, and they must not see an unlit camp.
+    refreshFire(this.world.fire);
+    this.world.runSec = 0;
+    this.world.outcome = null;
+    console.log('[room] camp empty — run reset');
   }
 
   receiveInput(playerId: PlayerId, frame: InputFrame): void {

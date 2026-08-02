@@ -172,11 +172,20 @@ export interface WorldState {
   players: Record<PlayerId, Player>;
   /** Null while the run is live. */
   outcome: Outcome | null;
+  /**
+   * Seconds of *run*, which is not the same as seconds of uptime.
+   *
+   * Advanced by the fire stage only while somebody is in the camp. A server
+   * process sitting empty is not a run in progress (Q124: no drop-in), and if
+   * this were derived from the tick count instead, a dev server left running
+   * would burn the fire down to nothing before anyone opened a tab.
+   */
+  runSec: number;
 }
 
-/** Seconds of run elapsed. Derived from the tick count so replay cannot drift. */
+/** Seconds of run elapsed — drives the burn escalation (Q4). */
 export function elapsedSec(world: WorldState): number {
-  return world.tick * TICK_DT;
+  return world.runSec;
 }
 
 /** Inputs for a single tick, keyed by player. A missing entry means idle. */
@@ -195,6 +204,7 @@ export function createWorld(w: number, h: number, grid?: OccluderGrid): WorldSta
     fire: createFire(),
     players: {},
     outcome: null,
+    runSec: 0,
   };
 }
 
