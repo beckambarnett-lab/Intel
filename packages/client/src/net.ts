@@ -6,11 +6,15 @@ import {
   decode,
   distance,
   encode,
+  gridFromMap,
+  isOpaqueTile,
   lanternRadius,
-  sandboxGrid,
+  sandboxMap,
+  setTile,
   step,
 } from '@ember/shared';
 import type {
+  Carrying,
   ClientMsg,
   FireView,
   InputFrame,
@@ -20,6 +24,8 @@ import type {
   Player,
   PlayerId,
   ServerMsg,
+  Vec2,
+  WorldItem,
   WorldState,
 } from '@ember/shared';
 
@@ -79,6 +85,17 @@ export class NetClient {
   connected = false;
   /** Null once the run has ended. */
   outcome: Outcome | null = null;
+
+  /**
+   * Set when a felled tree has cleared a tile in our grid, so the renderer
+   * knows to rebuild the static geometry. The lighting mask needs no such
+   * signal — it reads the grid live every frame, which is what makes the new
+   * sightline open the same frame the tree comes down (Q20).
+   */
+  gridDirty = false;
+
+  /** The woodpile's contents, or null when we cannot see the pile. */
+  woodpileContents: Carrying | null = null;
 
   private fireView: FireView | null = null;
 
@@ -192,7 +209,7 @@ export class NetClient {
         // Rebuild the map from the seed with the same shared code the server
         // ran. Prediction collides against this grid, so it has to be the same
         // geometry byte for byte — deriving it beats shipping it.
-        this.predicted = createWorld(msg.bounds.w, msg.bounds.h, sandboxGrid(msg.mapSeed));
+        this.predicted = createWorld(msg.bounds.w, msg.bounds.h, gridFromMap(sandboxMap(msg.mapSeed)));
         this.predicted.players[msg.playerId] = structuredClone(msg.you);
         this.predicted.tick = msg.tick;
         this.applyFireView(msg.fire);
@@ -217,6 +234,8 @@ export class NetClient {
 
         this.reconcile(msg.players, msg.ack);
         this.applyFireView(msg.fire);
+        this.applyWorldItems(msg.items, msg.felled);
+        this.woodpileContents = msg.woodpile;
         this.outcome = msg.outcome;
         this.stats.serverTick = msg.tick;
         this.stats.ack = msg.ack;
@@ -258,6 +277,14 @@ export class NetClient {
         mine.vel.x = p.vel.x;
         mine.vel.y = p.vel.y;
         mine.loadKg = p.loadKg;
+        mine.speedMul = p.speedMul;
+        mine.noiseMul = p.noiseMul;
+        // Inventory is authoritative — we do not predict picking things up,
+        // because guessing wrong makes wood flicker in and out of your hands.
+        mine.carrying = { ...p.carrying };
+        mine.chop = p.chop ? { ...p.chop } : null;
+        mine.stokeProgress = p.stokeProgress;
+        mine.depositProgress = p.depositProgress;
         // The shutter is authoritative too. Replaying the pending inputs below
         // re-applies any cycle the server has not consumed yet, so a press is
         // never lost and never applied twice.
@@ -347,6 +374,15 @@ export class NetClient {
     return this.predicted.grid;
   }
 
+  get woodpilePos(): Vec2 {
+    return this.predicted.woodpile.pos;
+  }
+
+  /** Items we can currently see. Everything else is out there in the dark. */
+  get visibleItems(): WorldItem[] {
+    return Object.values(this.predicted.items);
+  }
+
 
   /** The local lantern, for the debug HUD. */
   get lantern(): LanternState | null {
@@ -374,6 +410,28 @@ export class NetClient {
    * prediction is discarded and the server's view wins, exactly as it does for
    * our own position.
    */
+  /**
+   * Items and geometry are authoritative, like the fire.
+   *
+   * The whole item map is replaced rather than merged: a snapshot contains
+   * exactly what we can see, so anything missing from it is something we can
+   * no longer see, and it has to leave the screen (Q21).
+   *
+   * Felled tiles are applied to our own grid and never un-applied — trees do
+   * not come back (Q18), and clearing the tile is what opens the sightline on
+   * our side. `gridDirty` tells the renderer to redraw the static geometry.
+   */
+  private applyWorldItems(items: WorldItem[], felled: { x: number; y: number }[]): void {
+    this.predicted.items = {};
+    for (const item of items) this.predicted.items[item.id] = item;
+
+    for (const tile of felled) {
+      if (!isOpaqueTile(this.predicted.grid, tile.x, tile.y)) continue;
+      setTile(this.predicted.grid, tile.x, tile.y, 0);
+      this.gridDirty = true;
+    }
+  }
+
   private applyFireView(view: FireView): void {
     this.fireView = view;
 

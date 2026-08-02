@@ -8,14 +8,11 @@ import {
   FIRE_PERIMETER_MIN_FRAC,
   FIRE_RADIUS_ANCHORS,
   FIRE_SAFE_RADIUS_FRAC,
-  FIRE_STOKE_RANGE_M,
-  FIRE_STOKE_SEC,
   FIRE_TIERS,
-  FUEL_VALUE,
 } from '../constants.js';
-import { distance, lerp } from '../math.js';
+import { lerp } from '../math.js';
 import { elapsedSec } from '../types.js';
-import type { Fire, FireTier, TickInputs, WorldState } from '../types.js';
+import type { Fire, FireTier, WorldState } from '../types.js';
 
 /**
  * The clock.
@@ -154,54 +151,6 @@ export function fire(world: WorldState, dt: number): void {
   }
 
   refresh(f);
-}
-
-/**
- * Tick stage 8 — the stoking channel (Q8/Q9).
- *
- * Lives here rather than in the items system it shares a stage with, because
- * everything it touches is fire state. Step 4 owns the rest of stage 8 —
- * pickup, drop and the woodpile — and will call this alongside them.
- *
- * The channel is interruptible by design: releasing `E`, walking out of range,
- * or running out of wood all drop the progress rather than banking it. Feeding
- * the fire has to be a commitment you can be scared out of.
- */
-export function stoke(world: WorldState, inputs: TickInputs, dt: number): void {
-  const f = world.fire;
-
-  for (const id of Object.keys(world.players)) {
-    const player = world.players[id];
-    if (!player) continue;
-
-    const frame = inputs[id];
-    const wants = frame?.interact === true;
-    const inRange = distance(player.pos, f.pos) <= FIRE_STOKE_RANGE_M;
-    const hasWood = player.carriedLogs > 0;
-    // ASSUMPTION (Q9 sets the cap but not this edge): the whole log has to fit,
-    // or the channel does not start. Capping a partial log instead would burn a
-    // full log for a sliver of fuel every time you topped up a nearly-full
-    // fire — the cap is meant to stop you front-loading the run, not to eat
-    // your wood. The practical effect is that a fire above 275 is simply full.
-    const roomFor = f.fuel + FUEL_VALUE.log <= FIRE_CAPACITY;
-
-    if (!wants || !inRange || !hasWood || !roomFor || f.dead) {
-      player.stokeProgress = 0;
-      continue;
-    }
-
-    player.stokeProgress += dt;
-    if (player.stokeProgress < FIRE_STOKE_SEC) continue;
-
-    // Channel complete: one log onto the fire. The cap is belt and braces —
-    // `roomFor` above already guarantees it fits (Q9).
-    player.stokeProgress = 0;
-    player.carriedLogs -= 1;
-    f.fuel = Math.min(FIRE_CAPACITY, f.fuel + FUEL_VALUE.log);
-
-    if (f.fuel > 0) f.emberSecLeft = FIRE_EMBER_GRACE_SEC;
-    refresh(f);
-  }
 }
 
 /**

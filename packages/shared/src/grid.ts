@@ -1,6 +1,7 @@
 import {
   OCCLUDER_BLOCK_THRESHOLD,
   OCCLUDER_OPAQUE,
+  SANDBOX_DEADFALL_COUNT,
   SANDBOX_FIRE_CLEARING_M,
   SANDBOX_FIRE_POS,
   SANDBOX_HEIGHT_M,
@@ -45,6 +46,12 @@ export interface MapDef {
   walls: Rect[];
   /** 1m trunks. Scattered, but deterministically so. */
   trees: { x: number; y: number }[];
+  /**
+   * Deadfall branches lying on the ground (Q15): free wood, no tool, instant
+   * pickup. Placed once and never replenished (Q19) — like the trees, this is
+   * a finite stock, and stripping it is what eventually pushes you outward.
+   */
+  deadfall: { x: number; y: number }[];
 }
 
 export function createGrid(wTiles: number, hTiles: number): OccluderGrid {
@@ -144,7 +151,22 @@ export function sandboxMap(seed: number): MapDef {
     trees.push({ x, y });
   }
 
-  return { widthM, heightM, walls, trees };
+  // Deadfall goes on open ground — including inside the fire's clearing, since
+  // the easy wood being near camp is what makes the first few minutes calm.
+  const deadfall: { x: number; y: number }[] = [];
+  const occupied = new Set(trees.map((t) => `${t.x},${t.y}`));
+
+  for (let attempt = 0; attempt < SANDBOX_DEADFALL_COUNT * 12; attempt++) {
+    if (deadfall.length >= SANDBOX_DEADFALL_COUNT) break;
+    const x = rand() * widthM;
+    const y = rand() * heightM;
+    const tile = `${Math.floor(x)},${Math.floor(y)}`;
+    if (occupied.has(tile)) continue;
+    if (walls.some((w) => x >= w.x && x < w.x + w.w && y >= w.y && y < w.y + w.h)) continue;
+    deadfall.push({ x, y });
+  }
+
+  return { widthM, heightM, walls, trees, deadfall };
 }
 
 /** Convenience: the sandbox grid for a given seed. */

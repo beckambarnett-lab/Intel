@@ -1,7 +1,15 @@
 import type { Vec2 } from './math.js';
-import type { FireTier, InputFrame, Outcome, Player, PlayerId } from './types.js';
+import type {
+  Carrying,
+  FireTier,
+  InputFrame,
+  Outcome,
+  Player,
+  PlayerId,
+  WorldItem,
+} from './types.js';
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /**
  * What a client is told about the fire.
@@ -67,6 +75,20 @@ export type ServerMsg =
        * after it is still pending and gets replayed during reconciliation.
        */
       ack: number;
+      /**
+       * Items on the ground this player can see. Culled exactly like players:
+       * wood in the dark is invisible to everyone including whoever put it
+       * there (Q21).
+       */
+      items: WorldItem[];
+      /**
+       * Occluder tiles this player can see to have been cleared by felling
+       * (Q20). The client applies them to its own grid, which is what makes
+       * the new sightline open on its side too.
+       */
+      felled: { x: number; y: number }[];
+      /** The camp woodpile's contents. Only sent while you can see the pile. */
+      woodpile: Carrying | null;
       fire: FireView;
       /** Non-null once the run has ended. */
       outcome: Outcome | null;

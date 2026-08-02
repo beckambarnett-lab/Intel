@@ -45,6 +45,7 @@ export class InputSource {
     if (this.held.has('KeyS') || this.held.has('ArrowDown')) moveY += 1;
 
     const shutter = this.edges.delete('KeyF');
+    const panicDrop = this.edges.delete('KeyQ');
 
     return {
       seq,
@@ -53,15 +54,16 @@ export class InputSource {
       sprint: this.held.has('ShiftLeft') || this.held.has('ShiftRight'),
       creep: this.held.has('KeyC'),
       shutter,
-      // Held, not an edge — it drives the stoke channel, and letting go is
-      // what interrupts it (Q8).
+      // Held, not an edge — it drives the stoke and chop channels, and letting
+      // go is what interrupts them (Q8, Q16).
       interact: this.held.has('KeyE'),
+      panicDrop,
     };
   }
 }
 
-/** `F` cycles the shutter (Q126). */
-const EDGE_KEYS = new Set(['KeyF']);
+/** `F` cycles the shutter, `Q` panic-drops (Q126, Q35). */
+const EDGE_KEYS = new Set(['KeyF', 'KeyQ']);
 
 const MOVEMENT_KEYS = new Set([
   'KeyW',

@@ -8,7 +8,7 @@ import {
 import { createPlayer, createWorld, emptyInput } from '../types.js';
 import type { InputFrame, Player, WorldState } from '../types.js';
 import { cloneWorld, step } from './index.js';
-import { canSprint, speedMultiplierForLoad } from './movement.js';
+import { canSprint, speedMultiplierForLoad } from './weight.js';
 
 function worldWith(player: Partial<Player> = {}): WorldState {
   const world = createWorld(60, 40);

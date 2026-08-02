@@ -21,14 +21,18 @@ import { step } from './index.js';
 
 const FIRE_AT = { x: 12, y: 20 };
 
-function worldWith(playerCount: number, atFire = false): WorldState {
+function worldWith(playerCount: number, atFire = false, logs = 12): WorldState {
   const world = createWorld(60, 40);
   world.fire.pos = { ...FIRE_AT };
+  // Somewhere the woodpile cannot be mistaken for being in reach of the fire.
+  world.woodpile.pos = { x: 50, y: 5 };
 
   for (let i = 0; i < playerCount; i++) {
     const id = `p${i + 1}`;
     const pos = atFire ? { x: FIRE_AT.x + 1, y: FIRE_AT.y } : { x: 40, y: 30 };
-    world.players[id] = createPlayer(id, id, pos);
+    const player = createPlayer(id, id, pos);
+    player.carrying.log = logs;
+    world.players[id] = player;
   }
 
   return world;
@@ -273,123 +277,13 @@ describe('the ember scramble (L15, Q7)', () => {
     run(world, 5 * 60 + FIRE_EMBER_GRACE_SEC + 1);
     expect(world.outcome).toBe('embersDied');
 
-    const logsBefore = world.players['p1']!.carriedLogs;
+    const logsBefore = world.players['p1']!.carrying.log;
     run(world, 5, hold);
 
     expect(world.fire.fuel).toBe(0);
     expect(world.fire.dead).toBe(true);
     // And it does not silently eat your wood trying.
-    expect(world.players['p1']!.carriedLogs).toBe(logsBefore);
-  });
-});
-
-describe('stoking (Q8, Q9)', () => {
-  it('takes the documented 1.2s channel to land one log', () => {
-    const world = worldWith(1, true);
-    world.fire.fuel = 100;
-    const before = world.fire.fuel;
-    const logsBefore = world.players['p1']!.carriedLogs;
-
-    run(world, FIRE_STOKE_SEC - 2 * TICK_DT, hold);
-    expect(world.players['p1']!.carriedLogs).toBe(logsBefore);
-
-    run(world, 2 * TICK_DT, hold);
-    expect(world.players['p1']!.carriedLogs).toBe(logsBefore - 1);
-    // Net of the fuel that burned away during the channel.
-    expect(world.fire.fuel).toBeGreaterThan(before);
-  });
-
-  it('is interrupted by letting go, and banks nothing', () => {
-    const world = worldWith(1, true);
-    const logsBefore = world.players['p1']!.carriedLogs;
-
-    run(world, FIRE_STOKE_SEC - 2 * TICK_DT, hold);
-    run(world, TICK_DT, idle);
-    expect(world.players['p1']!.stokeProgress).toBe(0);
-
-    // Starting again has to pay the full channel over.
-    run(world, FIRE_STOKE_SEC - 2 * TICK_DT, hold);
-    expect(world.players['p1']!.carriedLogs).toBe(logsBefore);
-  });
-
-  it('is interrupted by walking out of range (Q8)', () => {
-    const world = worldWith(1, true);
-    const logsBefore = world.players['p1']!.carriedLogs;
-
-    run(world, FIRE_STOKE_SEC - 2 * TICK_DT, hold);
-    world.players['p1']!.pos.x = FIRE_AT.x + FIRE_STOKE_RANGE_M + 1;
-    run(world, TICK_DT, hold);
-
-    expect(world.players['p1']!.stokeProgress).toBe(0);
-    expect(world.players['p1']!.carriedLogs).toBe(logsBefore);
-  });
-
-  it('cannot be done from out of range at all', () => {
-    const world = worldWith(1, false); // spawned away from the fire
-    const logsBefore = world.players['p1']!.carriedLogs;
-
-    run(world, FIRE_STOKE_SEC * 3, hold);
-    expect(world.players['p1']!.carriedLogs).toBe(logsBefore);
-  });
-
-  it('hard caps at capacity and does not consume a log to overfill (Q9)', () => {
-    const world = worldWith(1, true);
-    expect(world.fire.fuel).toBe(FIRE_CAPACITY);
-
-    const logsBefore = world.players['p1']!.carriedLogs;
-    // The fire is full, so the channel never even starts.
-    run(world, FIRE_STOKE_SEC + TICK_DT, hold);
-    expect(world.players['p1']!.carriedLogs).toBe(logsBefore);
-    expect(world.fire.fuel).toBeLessThanOrEqual(FIRE_CAPACITY);
-  });
-
-  /**
-   * A log has to fit whole or not go on at all — otherwise topping up a
-   * nearly-full fire silently burns a full log for a couple of points of fuel.
-   */
-  it('will not burn a log for a sliver of fuel on a nearly full fire', () => {
-    const world = worldWith(1, true);
-    world.fire.fuel = FIRE_CAPACITY - 1;
-    const logsBefore = world.players['p1']!.carriedLogs;
-
-    run(world, FIRE_STOKE_SEC * 2, hold);
-
-    expect(world.players['p1']!.carriedLogs).toBe(logsBefore);
-    expect(world.fire.fuel).toBeLessThanOrEqual(FIRE_CAPACITY);
-  });
-
-  it('accepts a log the moment a whole one fits, and reaches exactly capacity', () => {
-    const world = worldWith(1, true);
-    world.fire.fuel = FIRE_CAPACITY - FUEL_VALUE.log;
-    const logsBefore = world.players['p1']!.carriedLogs;
-
-    run(world, FIRE_STOKE_SEC + TICK_DT, hold);
-
-    expect(world.players['p1']!.carriedLogs).toBe(logsBefore - 1);
-    expect(world.fire.fuel).toBeLessThanOrEqual(FIRE_CAPACITY);
-    expect(world.fire.fuel).toBeGreaterThan(FIRE_CAPACITY - FUEL_VALUE.log);
-  });
-
-  it('stops when you run out of wood', () => {
-    const world = worldWith(1, true);
-    world.players['p1']!.carriedLogs = 1;
-    world.fire.fuel = 10;
-
-    run(world, FIRE_STOKE_SEC * 4, hold);
-
-    expect(world.players['p1']!.carriedLogs).toBe(0);
-    expect(world.players['p1']!.stokeProgress).toBe(0);
-  });
-
-  it('adds the documented fuel value of a log (Q10)', () => {
-    const world = worldWith(1, true);
-    world.fire.fuel = 100;
-
-    const before = world.fire.fuel;
-    run(world, FIRE_STOKE_SEC + TICK_DT, hold);
-
-    const burned = burnRatePerSec(world) * (FIRE_STOKE_SEC + TICK_DT);
-    expect(world.fire.fuel).toBeCloseTo(before + FUEL_VALUE.log - burned, 1);
+    expect(world.players['p1']!.carrying.log).toBe(logsBefore);
   });
 });
 

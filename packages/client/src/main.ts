@@ -1,4 +1,11 @@
-import { FIRE_CAPACITY, FIRE_STOKE_SEC, TICK_MS, lanternRadius } from '@ember/shared';
+import {
+  CARRY_CAPACITY_KG,
+  CHOP_SWINGS,
+  FIRE_CAPACITY,
+  FIRE_STOKE_SEC,
+  TICK_MS,
+  lanternRadius,
+} from '@ember/shared';
 import type { LanternState } from '@ember/shared';
 import { InputSource } from './input.js';
 import { NetClient } from './net.js';
@@ -49,14 +56,18 @@ async function main(): Promise<void> {
       accumulator -= TICK_MS;
     }
 
-    if (!mapDrawn && net.playerId && net.fire) {
-      stage.drawMap(net.grid, net.bounds.w, net.bounds.h, net.fire.pos);
+    // Redrawn on first sight of the map, and again whenever a felled tree has
+    // cleared a tile (Q20). The lighting mask needs no redraw — it reads the
+    // grid every frame, so the sightline opens the moment the trunk goes.
+    if (net.playerId && net.fire && (!mapDrawn || net.gridDirty)) {
+      stage.drawMap(net.grid, net.bounds.w, net.bounds.h, net.fire.pos, net.woodpilePos);
+      net.gridDirty = false;
       mapDrawn = true;
     }
 
     const players = net.renderedPlayers(now);
     const me = players.find((p) => p.isLocal) ?? null;
-    stage.render(net.grid, net.fire, players, me);
+    stage.render(net.grid, net.fire, players, net.visibleItems, me);
 
     hud.textContent = formatHud(net);
     requestAnimationFrame(frame);
@@ -100,12 +111,24 @@ function formatHud(net: NetClient): string {
 
   const me = net.me;
   if (me) {
-    const channel =
-      me.stokeProgress > 0
-        ? `  stoking ${((me.stokeProgress / FIRE_STOKE_SEC) * 100).toFixed(0)}%`
-        : '';
-    lines.push(`logs ${me.carriedLogs}${channel}`);
+    const pct = ((me.loadKg / CARRY_CAPACITY_KG) * 100).toFixed(0);
+    lines.push(
+      `carrying ${me.carrying.log} logs, ${me.carrying.branch} branches` +
+        `  ${me.loadKg.toFixed(1)}/${CARRY_CAPACITY_KG}kg (${pct}%)  speed ${(me.speedMul * 100).toFixed(0)}%`,
+    );
+
+    if (me.chop) {
+      const swings = `${me.chop.swings}/${CHOP_SWINGS}`;
+      lines.push(`chopping ${swings} swings`);
+    } else if (me.stokeProgress > 0) {
+      lines.push(`stoking ${((me.stokeProgress / FIRE_STOKE_SEC) * 100).toFixed(0)}%`);
+    } else if (me.depositProgress > 0) {
+      lines.push('depositing');
+    }
   }
+
+  const pile = net.woodpileContents;
+  if (pile) lines.push(`woodpile ${pile.log} logs, ${pile.branch} branches`);
 
   if (net.outcome === 'embersDied') lines.push('THE EMBERS DIED — run over');
 

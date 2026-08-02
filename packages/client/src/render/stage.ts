@@ -5,7 +5,7 @@ import {
   TILE_M,
   isOpaqueTile,
 } from '@ember/shared';
-import type { FireView, OccluderGrid, Vec2 } from '@ember/shared';
+import type { FireView, OccluderGrid, Vec2, WorldItem } from '@ember/shared';
 import { Application, Container, Graphics, Text, TextStyle } from 'pixi.js';
 import type { RenderedPlayer } from '../net.js';
 import { HorizonBloom } from './hud.js';
@@ -18,12 +18,18 @@ function fireBodyAlpha(fire: FireView): number {
   return BLOOM_TIER_BRIGHTNESS[fire.tier];
 }
 
+/** Radius of a dropped item's marker, metres. */
+const ITEM_DOT_M = { log: 0.22, branch: 0.14 } as const;
+
 const COLOUR = {
   ground: 0x14141a,
   grid: 0x1c1c24,
   occluder: 0x2c2c36,
   occluderEdge: 0x3a3a48,
   fire: 0xff9436,
+  log: 0x8a6a44,
+  branch: 0x6d5c46,
+  woodpile: 0x4a3a2a,
   localPlayer: 0xffb454, // firelight orange — the one warm colour (Q128)
   remotePlayer: 0x7d8ea3,
   label: 0xc8c4bd,
@@ -44,6 +50,8 @@ export class Stage {
   private ground = new Graphics();
   private occluders = new Graphics();
   private fire = new Graphics();
+  private woodpile = new Graphics();
+  private itemLayer = new Graphics();
   private bodies = new Container();
   private lights = new LightField();
   private bloom = new HorizonBloom();
@@ -69,6 +77,8 @@ export class Stage {
 
     this.world.addChild(this.ground);
     this.world.addChild(this.occluders);
+    this.world.addChild(this.woodpile);
+    this.world.addChild(this.itemLayer);
     this.world.addChild(this.fire);
     this.world.addChild(this.bodies);
 
@@ -90,7 +100,13 @@ export class Stage {
    * cheaper than rebuilding geometry per frame, and none of it reaches the
    * screen unless a light polygon reveals it.
    */
-  drawMap(grid: OccluderGrid, widthM: number, heightM: number, firePos: Vec2): void {
+  drawMap(
+    grid: OccluderGrid,
+    widthM: number,
+    heightM: number,
+    firePos: Vec2,
+    woodpilePos: Vec2,
+  ): void {
     const w = widthM * PIXELS_PER_METRE;
     const h = heightM * PIXELS_PER_METRE;
 
@@ -126,14 +142,37 @@ export class Stage {
     this.fire
       .circle(firePos.x * PIXELS_PER_METRE, firePos.y * PIXELS_PER_METRE, 0.6 * PIXELS_PER_METRE)
       .fill(COLOUR.fire);
+
+    this.woodpile.clear();
+    this.woodpile
+      .rect(
+        (woodpilePos.x - 0.9) * PIXELS_PER_METRE,
+        (woodpilePos.y - 0.6) * PIXELS_PER_METRE,
+        1.8 * PIXELS_PER_METRE,
+        1.2 * PIXELS_PER_METRE,
+      )
+      .fill(COLOUR.woodpile)
+      .stroke({ width: 1, color: COLOUR.log });
   }
 
   render(
     grid: OccluderGrid,
     fire: FireView | null,
     players: RenderedPlayer[],
+    worldItems: WorldItem[],
     cameraTargetM: { x: number; y: number } | null,
   ): void {
+    // Items are drawn inside the masked world container, so wood in the dark
+    // is invisible even though we hold it in memory — and the server did not
+    // send it anyway (Q21).
+    this.itemLayer.clear();
+    for (const item of worldItems) {
+      const r = (item.kind === 'log' ? ITEM_DOT_M.log : ITEM_DOT_M.branch) * PIXELS_PER_METRE;
+      this.itemLayer
+        .circle(item.pos.x * PIXELS_PER_METRE, item.pos.y * PIXELS_PER_METRE, r)
+        .fill(item.kind === 'log' ? COLOUR.log : COLOUR.branch);
+    }
+
     const seen = new Set<string>();
 
     for (const p of players) {

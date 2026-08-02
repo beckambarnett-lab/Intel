@@ -3,9 +3,10 @@ import {
   FIRE_EMBER_GRACE_SEC,
   LANTERN_START_STAGE,
   LANTERN_TANK,
+  MASS_KG,
+  PLAYERS_START_WITH_AXE,
   SANDBOX_FIRE_POS,
-  STARTING_LOGS,
-  TICK_DT,
+  SANDBOX_WOODPILE_POS,
   TILE_M,
 } from './constants.js';
 import { createGrid } from './grid.js';
@@ -35,9 +36,14 @@ export interface InputFrame {
   shutter: boolean;
   /**
    * `E` held (Q126). Held rather than edge-triggered because it drives a
-   * channel: releasing it is what interrupts the stoke (Q8).
+   * channel: releasing it is what interrupts the stoke (Q8) or the chop (Q16).
    */
   interact: boolean;
+  /**
+   * `Q` pressed (Q35). Edge-triggered — it dumps everything you carry in one
+   * tick, and a held key would re-dump every frame you kept it down.
+   */
+  panicDrop: boolean;
 }
 
 export function emptyInput(seq: number): InputFrame {
@@ -49,6 +55,7 @@ export function emptyInput(seq: number): InputFrame {
     creep: false,
     shutter: false,
     interact: false,
+    panicDrop: false,
   };
 }
 
@@ -97,16 +104,119 @@ export interface Player {
    * Carried mass in kg. Step 4 fills this from real inventory; movement already
    * honours it, so weight lands without touching the movement system again.
    */
+  /** Carried mass in kg, recomputed from `carrying` every tick by stage 2. */
   loadKg: number;
+  /** Speed multiplier from load (Q31). Stage 2 writes it, stage 3 reads it. */
+  speedMul: number;
+  /** Sound radius multiplier from load (Q36). Nothing reads it until Step 6. */
+  noiseMul: number;
   lantern: LanternState;
   /**
-   * Logs in hand. Step 4 replaces this with real inventory and weight; for now
-   * it is the only wood in the world, so that stoking can be built and the
-   * ember scramble can be played.
+   * What you are carrying, by kind and count. Weight only — no grid, no slots
+   * (Q34). You carry what you can bear and nothing tells you to stop.
    */
-  carriedLogs: number;
+  carrying: Carrying;
+  /** Q15: standing trees need an axe. See PLAYERS_START_WITH_AXE. */
+  hasAxe: boolean;
+  /**
+   * Movement intent for this tick, set by stage 1 and consumed by stage 3.
+   * Intent is separated from velocity so that weight (stage 2) gets to act on
+   * the load in between — which is the whole point of the tick order.
+   */
+  intent: MoveIntent;
   /** Seconds accumulated into the current stoke channel (Q8). Zero when idle. */
   stokeProgress: number;
+  /** Seconds accumulated into the current woodpile deposit (Q22). */
+  depositProgress: number;
+  /** Chopping state (Q16). Null when not swinging at anything. */
+  chop: ChopState | null;
+}
+
+/**
+ * Things that exist in the world and can be carried.
+ *
+ * Step 9 adds scrap, Step 7 the gun, Step 8 corpses and Step 12 the amulet;
+ * their masses are already in MASS_KG but nothing spawns them yet.
+ */
+export type ItemKind = 'branch' | 'log';
+
+export const ITEM_KINDS: ItemKind[] = ['log', 'branch'];
+
+export type Carrying = Record<ItemKind, number>;
+
+export function emptyCarrying(): Carrying {
+  return { branch: 0, log: 0 };
+}
+
+/** Total mass of a load in kg, from the Q33 mass table. */
+export function carriedMassKg(carrying: Carrying): number {
+  let kg = 0;
+  for (const kind of ITEM_KINDS) kg += carrying[kind] * MASS_KG[kind];
+  return kg;
+}
+
+/** How many items in total, regardless of kind. */
+export function carriedCount(carrying: Carrying): number {
+  let n = 0;
+  for (const kind of ITEM_KINDS) n += carrying[kind];
+  return n;
+}
+
+export interface MoveIntent {
+  x: number;
+  y: number;
+  sprint: boolean;
+  creep: boolean;
+}
+
+export interface ChopState {
+  /** Which trunk, by tile. */
+  treeId: string;
+  /** Seconds into the current swing. Lost if you are interrupted. */
+  swingProgress: number;
+  /**
+   * Swings this *trunk* has taken, not this session. Damage persists across
+   * interruptions, so the count is a property of the tree — it is mirrored
+   * here because the client is never sent tree entities and still has to
+   * show you how far along you are.
+   */
+  swings: number;
+}
+
+/**
+ * An item lying on the ground.
+ *
+ * Q21: dropped logs persist indefinitely and are visible to nobody in the dark
+ * — including whoever dropped them. That makes items subject to exactly the
+ * same per-player culling as players are, and it is why a stash you cannot
+ * find again is a real way to lose wood.
+ */
+export interface WorldItem {
+  id: string;
+  kind: ItemKind;
+  pos: Vec2;
+}
+
+/**
+ * A standing tree. Felling one clears its occluder tile permanently (Q20),
+ * which makes clearing a lane home a real strategy, and permanent depletion
+ * (Q18) is the engine that eventually forces you down the tube.
+ */
+export interface Tree {
+  id: string;
+  /** Occluder tile this trunk occupies. */
+  tx: number;
+  ty: number;
+  /** Centre of that tile, for range checks and rendering. */
+  pos: Vec2;
+  swingsLeft: number;
+  felled: boolean;
+}
+
+/** The camp woodpile. Unlimited (Q22), and the fire can be fed from it (Q23). */
+export interface Woodpile {
+  pos: Vec2;
+  contents: Carrying;
 }
 
 /** A player at spawn. One place to add fields as later steps grow the struct. */
@@ -117,9 +227,15 @@ export function createPlayer(id: PlayerId, name: string, pos: Vec2): Player {
     pos: { ...pos },
     vel: { x: 0, y: 0 },
     loadKg: 0,
+    speedMul: 1,
+    noiseMul: 1,
     lantern: createLantern(),
-    carriedLogs: STARTING_LOGS,
+    carrying: emptyCarrying(),
+    hasAxe: PLAYERS_START_WITH_AXE,
+    intent: { x: 0, y: 0, sprint: false, creep: false },
     stokeProgress: 0,
+    depositProgress: 0,
+    chop: null,
   };
 }
 
@@ -169,7 +285,14 @@ export interface WorldState {
   /** True geometry. Collision and line of sight read this and only this (Q48). */
   grid: OccluderGrid;
   fire: Fire;
+  woodpile: Woodpile;
   players: Record<PlayerId, Player>;
+  /** Items on the ground, by id. Persist indefinitely (Q21). */
+  items: Record<string, WorldItem>;
+  /** Standing and felled trees, by id. Never respawn (Q18). */
+  trees: Record<string, Tree>;
+  /** Monotonic source of item ids. Server-authoritative. */
+  nextItemId: number;
   /** Null while the run is live. */
   outcome: Outcome | null;
   /**
@@ -202,7 +325,11 @@ export function createWorld(w: number, h: number, grid?: OccluderGrid): WorldSta
     bounds: { w, h },
     grid: grid ?? createGrid(Math.ceil(w / TILE_M), Math.ceil(h / TILE_M)),
     fire: createFire(),
+    woodpile: { pos: { ...SANDBOX_WOODPILE_POS }, contents: emptyCarrying() },
     players: {},
+    items: {},
+    trees: {},
+    nextItemId: 1,
     outcome: null,
     runSec: 0,
   };

@@ -4,6 +4,7 @@ import {
   createPlayer,
   createWorld,
   fillRect,
+  spawnItem,
 } from '@ember/shared';
 import type { Player, PlayerId, WorldState } from '@ember/shared';
 import { describe, expect, it } from 'vitest';
@@ -182,6 +183,111 @@ describe('what the fire tells you (Q13, Q127)', () => {
     addPlayer(w, 'p1', FIRE.x + 4, FIRE.y);
 
     expect(fireViewFor(w, 'p1').fuel).toBeUndefined();
+  });
+});
+
+/**
+ * Q21 is unusually explicit: dropped wood is "visible to nobody in the dark —
+ * including you". A stash you cannot find again is only a real risk if the
+ * client is genuinely not told where it is.
+ */
+describe('items in the dark (Q21)', () => {
+  it('does not send an item lying out in the dark', () => {
+    const w = world();
+    addPlayer(w, 'p1', 40, 20);
+    spawnItem(w, 'log', { x: 70, y: 35 });
+
+    const index = new VisibilityIndex();
+    expect(index.visibleItemsTo(w, 'p1', 0)).toHaveLength(0);
+  });
+
+  it('sends one inside your own lantern light', () => {
+    const w = world();
+    addPlayer(w, 'p1', 40, 20);
+    const item = spawnItem(w, 'log', { x: 41.5, y: 20 });
+
+    const index = new VisibilityIndex();
+    expect(index.visibleItemsTo(w, 'p1', 0).map((i) => i.id)).toEqual([item.id]);
+  });
+
+  it('does not send your own dropped wood once you walk away from it', () => {
+    const w = world();
+    const p1 = addPlayer(w, 'p1', 40, 20);
+    spawnItem(w, 'log', { x: 41, y: 20 });
+
+    const index = new VisibilityIndex();
+    expect(index.visibleItemsTo(w, 'p1', 0)).toHaveLength(1);
+
+    // You know you left it there. The client is not told, and neither are you.
+    p1.pos = { x: 70, y: 35 };
+    expect(index.visibleItemsTo(w, 'p1', VISIBILITY_HYSTERESIS_MS + 1)).toHaveLength(0);
+  });
+
+  it('does not send one hidden behind an occluder within your light', () => {
+    const w = world();
+    fillRect(w.grid, { x: 42, y: 18, w: 1, h: 5 });
+    addPlayer(w, 'p1', 40, 20);
+    spawnItem(w, 'log', { x: 43.5, y: 20 });
+
+    const index = new VisibilityIndex();
+    expect(index.visibleItemsTo(w, 'p1', 0)).toHaveLength(0);
+  });
+
+  it('sends one lit by the bonfire', () => {
+    const w = world();
+    const p1 = addPlayer(w, 'p1', 30, 10);
+    p1.lantern.stage = 'hooded';
+    p1.lantern.target = 'hooded';
+    spawnItem(w, 'log', { x: FIRE.x + 2, y: FIRE.y });
+
+    const index = new VisibilityIndex();
+    expect(index.visibleItemsTo(w, 'p1', 0)).toHaveLength(1);
+  });
+});
+
+/**
+ * Felling permanently clears an occluder (Q20). The client needs that to keep
+ * its grid honest — but learning that a trunk fell across the map would tell
+ * you exactly where somebody is standing and chopping.
+ */
+describe('felled tiles (Q20)', () => {
+  function addTree(w: ReturnType<typeof world>, x: number, y: number, felled: boolean): void {
+    const id = `t${x},${y}`;
+    w.trees[id] = {
+      id,
+      tx: x,
+      ty: y,
+      pos: { x: x + 0.5, y: y + 0.5 },
+      swingsLeft: felled ? 0 : 6,
+      felled,
+    };
+  }
+
+  it('tells you about a stump you can see', () => {
+    const w = world();
+    addPlayer(w, 'p1', 40, 20);
+    addTree(w, 41, 20, true);
+
+    const index = new VisibilityIndex();
+    expect(index.visibleFelledTilesTo(w, 'p1')).toEqual([{ x: 41, y: 20 }]);
+  });
+
+  it('says nothing about one felled across the map', () => {
+    const w = world();
+    addPlayer(w, 'p1', 40, 20);
+    addTree(w, 70, 35, true);
+
+    const index = new VisibilityIndex();
+    expect(index.visibleFelledTilesTo(w, 'p1')).toHaveLength(0);
+  });
+
+  it('says nothing about trees still standing', () => {
+    const w = world();
+    addPlayer(w, 'p1', 40, 20);
+    addTree(w, 41, 20, false);
+
+    const index = new VisibilityIndex();
+    expect(index.visibleFelledTilesTo(w, 'p1')).toHaveLength(0);
   });
 });
 

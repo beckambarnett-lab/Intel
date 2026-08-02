@@ -6,16 +6,28 @@ import {
   TICK_DT,
   TICK_MS,
   TICK_RATE,
+  canSee,
   createFire,
   createPlayer,
   createWorld,
+  emptyCarrying,
   encode,
+  gridFromMap,
   isBlockedAt,
+  lanternRadius,
+  populateFromMap,
   refreshFire,
-  sandboxGrid,
+  sandboxMap,
   step,
 } from '@ember/shared';
-import type { InputFrame, Player, PlayerId, TickInputs, WorldState } from '@ember/shared';
+import type {
+  Carrying,
+  InputFrame,
+  Player,
+  PlayerId,
+  TickInputs,
+  WorldState,
+} from '@ember/shared';
 import type { WebSocket } from 'ws';
 import { VisibilityIndex, fireViewFor } from './visibility.js';
 
@@ -57,7 +69,9 @@ export class Room {
   constructor(mapSeed?: number) {
     this.mapSeed = mapSeed ?? SANDBOX_MAP_SEED;
     const seed = this.mapSeed;
-    this.world = createWorld(SANDBOX_WIDTH_M, SANDBOX_HEIGHT_M, sandboxGrid(seed));
+    const map = sandboxMap(seed);
+    this.world = createWorld(SANDBOX_WIDTH_M, SANDBOX_HEIGHT_M, gridFromMap(map));
+    populateFromMap(this.world, map);
     refreshFire(this.world.fire);
   }
 
@@ -137,8 +151,22 @@ export class Room {
     if (this.connections.size === 0) this.resetRun();
   }
 
-  /** Back to a full fire and a zeroed clock. The map is untouched. */
+  /**
+   * Back to a full fire, a zeroed clock, and an unlogged wood.
+   *
+   * The map's geometry is regenerated too: felled trees permanently clear
+   * their occluder tiles (Q20), so a fresh run has to start from a fresh grid
+   * or each run would inherit the last one's clearcut.
+   */
   private resetRun(): void {
+    const map = sandboxMap(this.mapSeed);
+    this.world.grid = gridFromMap(map);
+    this.world.trees = {};
+    this.world.items = {};
+    this.world.nextItemId = 1;
+    this.world.woodpile = { pos: { ...this.world.woodpile.pos }, contents: emptyCarrying() };
+    populateFromMap(this.world, map);
+
     this.world.fire = createFire();
     // Derive tier and radii now rather than on the next tick — someone can
     // join in between, and they must not see an unlit camp.
@@ -218,6 +246,8 @@ export class Room {
       if (conn.socket.readyState !== conn.socket.OPEN) continue;
 
       const players = this.visibility.visibleTo(this.world, conn.playerId, now);
+      const items = this.visibility.visibleItemsTo(this.world, conn.playerId, now);
+      const felled = this.visibility.visibleFelledTilesTo(this.world, conn.playerId);
 
       conn.socket.send(
         encode({
@@ -225,11 +255,34 @@ export class Room {
           tick: this.world.tick,
           players,
           ack: conn.ack,
+          items,
+          felled,
+          woodpile: this.woodpileViewFor(conn.playerId),
           fire: fireViewFor(this.world, conn.playerId),
           outcome: this.world.outcome,
         }),
       );
     }
+  }
+
+  /**
+   * The woodpile's contents, but only to someone who can see the pile.
+   *
+   * Same reasoning as the fire's fuel (Q127): how much wood is banked at camp
+   * is something you read by looking at it, not something you know from the
+   * far end of the map.
+   */
+  private woodpileViewFor(playerId: PlayerId): Carrying | null {
+    const viewer = this.world.players[playerId];
+    if (!viewer) return null;
+
+    const pile = this.world.woodpile;
+    const lit =
+      canSee(this.world.grid, viewer.pos, lanternRadius(viewer.lantern), pile.pos) ||
+      (canSee(this.world.grid, this.world.fire.pos, this.world.fire.lightRadiusM, pile.pos) &&
+        canSee(this.world.grid, viewer.pos, Infinity, pile.pos));
+
+    return lit ? { ...pile.contents } : null;
   }
 
   get playerCount(): number {

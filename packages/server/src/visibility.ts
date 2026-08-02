@@ -1,5 +1,5 @@
 import { VISIBILITY_HYSTERESIS_MS, canSee, lanternRadius } from '@ember/shared';
-import type { FireView, Player, PlayerId, WorldState } from '@ember/shared';
+import type { FireView, Player, PlayerId, WorldItem, WorldState } from '@ember/shared';
 
 /**
  * The fire as this player may see it.
@@ -111,6 +111,79 @@ export class VisibilityIndex {
       // standing in the firelight.
       canSee(world.grid, viewer.pos, Infinity, target.pos)
     );
+  }
+
+  /**
+   * The items this player may receive.
+   *
+   * Q21 is explicit that dropped wood is "visible to nobody in the dark —
+   * including you", so items go through exactly the same test as players do.
+   * A stash you cannot find again is a real way to lose a load, and that only
+   * holds if the client is never told where it is.
+   */
+  visibleItemsTo(world: WorldState, viewerId: PlayerId, nowMs: number): WorldItem[] {
+    const viewer = world.players[viewerId];
+    if (!viewer) return [];
+
+    const out: WorldItem[] = [];
+    const lantern = lanternRadius(viewer.lantern);
+    const fire = world.fire;
+
+    for (const id of Object.keys(world.items)) {
+      const item = world.items[id];
+      if (!item) continue;
+
+      const key = `${viewerId}|item:${id}`;
+      const lit =
+        canSee(world.grid, viewer.pos, lantern, item.pos) ||
+        (canSee(world.grid, fire.pos, fire.lightRadiusM, item.pos) &&
+          canSee(world.grid, viewer.pos, Infinity, item.pos));
+
+      if (lit) {
+        this.lastSeenAt.set(key, nowMs);
+        out.push(item);
+        continue;
+      }
+
+      const last = this.lastSeenAt.get(key);
+      if (last !== undefined && nowMs - last < VISIBILITY_HYSTERESIS_MS) out.push(item);
+    }
+
+    return out;
+  }
+
+  /**
+   * Tiles whose trees have been felled and that this player can currently see.
+   *
+   * Felling permanently clears an occluder (Q20), and the client has to apply
+   * that to its own grid or its lighting and its collision drift from the
+   * server's. Culled like everything else: learning that a trunk fell 200m
+   * away would tell you exactly where somebody is chopping.
+   */
+  visibleFelledTilesTo(
+    world: WorldState,
+    viewerId: PlayerId,
+  ): { x: number; y: number }[] {
+    const viewer = world.players[viewerId];
+    if (!viewer) return [];
+
+    const out: { x: number; y: number }[] = [];
+    const lantern = lanternRadius(viewer.lantern);
+    const fire = world.fire;
+
+    for (const id of Object.keys(world.trees)) {
+      const tree = world.trees[id];
+      if (!tree || !tree.felled) continue;
+
+      const lit =
+        canSee(world.grid, viewer.pos, lantern, tree.pos) ||
+        (canSee(world.grid, fire.pos, fire.lightRadiusM, tree.pos) &&
+          canSee(world.grid, viewer.pos, Infinity, tree.pos));
+
+      if (lit) out.push({ x: tree.tx, y: tree.ty });
+    }
+
+    return out;
   }
 
   /** Drop a departed player's pairs so the map does not grow across a long run. */

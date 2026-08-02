@@ -125,15 +125,49 @@ export const FIRE_RADIUS_ANCHORS = FIRE_TIERS.map((tier, i) => {
   .slice()
   .reverse();
 
+// ---------------------------------------------------------------------------
+// Wood & chopping (§3)
+// ---------------------------------------------------------------------------
+
+/** Swings to fell a standing tree, and how long each one takes (Q16). */
+export const CHOP_SWINGS = 6;
+export const CHOP_SWING_SEC = 0.7;
+
+/** Logs a felled tree yields (Q16). */
+export const CHOP_YIELD_LOGS = 4;
+
+/** How close you must be to a trunk to swing at it. */
+export const CHOP_RANGE_M = 1.6;
+
 /**
- * Logs each player starts the run holding.
+ * ASSUMPTION — players start with an axe.
  *
- * Step 3 stand-in. There is no way to acquire wood until Step 4 builds
- * chopping, the woodpile and real inventory; without a starting stock the
- * ember scramble cannot be played at all, which is this step's gate. Delete
- * this when items land.
+ * Q15 says standing trees need an axe, but Q88 makes the axe a *craftable*
+ * (2 scrap + 3 wood) and crafting is Step 9. Step 4's gate is that a solo
+ * player keeps the fire alive for fifteen minutes by chopping, which is
+ * impossible if the only axe is five steps away. Read alongside "Second
+ * lantern" being a recipe — that phrasing implies you start with the first
+ * one — the axe recipe most likely covers a spare, not your only tool.
+ *
+ * Q33 gives no mass for an axe, so it is carried weightlessly for now.
  */
-export const STARTING_LOGS = 12;
+export const PLAYERS_START_WITH_AXE = true;
+
+/** Deadfall is picked up by hand, no tool, instantly (Q15). */
+export const PICKUP_RANGE_M = 1.2;
+
+/** Panic drop scatters your load rather than stacking it in one spot (Q35). */
+export const PANIC_DROP_SCATTER_M = 0.7;
+
+/** Woodpile: unlimited capacity, 0.25s per log to deposit (Q22). */
+export const DEPOSIT_SEC_PER_ITEM = 0.25;
+export const DEPOSIT_RANGE_M = 1.5;
+
+/** Where the sandbox woodpile sits — far enough from the fire that `E` is unambiguous. */
+export const SANDBOX_WOODPILE_POS = { x: 12, y: 24 } as const;
+
+/** Deadfall branches scattered across the sandbox (Q15). Never respawns (Q19). */
+export const SANDBOX_DEADFALL_COUNT = 70;
 
 // ---------------------------------------------------------------------------
 // Lantern (§6)
