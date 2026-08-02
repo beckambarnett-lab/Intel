@@ -1,6 +1,4 @@
 import {
-  COMPOSITE_AMBIENT,
-  COMPOSITE_EXPOSURE,
   FIRE_CORE_COLOUR,
   FIRE_CORE_RADIUS_M,
   FIRE_FLICKER_AMPLITUDE,
@@ -11,10 +9,16 @@ import {
   LANTERN_FLICKER_HZ,
   LANTERN_LIGHT_COLOUR,
   LANTERN_LIGHT_INTENSITY,
+  MEMORY_PROPERLY_LIT_FRAC,
+  MEMORY_WRITE_MARGIN_M,
   PIXELS_PER_METRE,
   PLAYER_RADIUS,
   TILE_M,
+  canSee,
+  isBlockedAt,
   isOpaqueTile,
+  mulberry32,
+  visibilityPolygon,
 } from '@ember/shared';
 import type { FireView, OccluderGrid, Vec2, WorldItem } from '@ember/shared';
 import { Application, Container, Graphics, RenderTexture, Text, TextStyle } from 'pixi.js';
@@ -23,6 +27,11 @@ import { Composite } from './composite.js';
 import { HorizonBloom } from './hud.js';
 import { LightField } from './lighting.js';
 import type { Light } from './lighting.js';
+import { MemoryField } from './memory.js';
+import { PhantomField } from './phantoms.js';
+import type { PhantomEnv } from './phantoms.js';
+import { SeenField } from './seen.js';
+import { drawSilhouette } from './silhouette.js';
 
 /**
  * Deterministic-looking flicker without a PRNG.
@@ -80,6 +89,7 @@ export class Stage {
   private fire = new Graphics();
   private woodpile = new Graphics();
   private itemLayer = new Graphics();
+  private phantomLayer = new Graphics();
   private bodies = new Container();
   private lights = new LightField();
   private bloom = new HorizonBloom();
@@ -90,8 +100,21 @@ export class Stage {
   private albedoRT!: RenderTexture;
   /** Light: every source's coloured falloff, clipped to line of sight. */
   private lightRT!: RenderTexture;
+  /** Memory: how long ago you last saw each pixel (Q46). Null until the map lands. */
+  private memory: MemoryField | null = null;
+  /** The same field on the CPU, for decisions the shader cannot make. */
+  private seen: SeenField | null = null;
+  /**
+   * Q53: memory is per-player, so its hallucinations are too. Seeded from the
+   * session rather than from the map — two players standing in the same rotten
+   * clearing must not see the same thing in the same place.
+   */
+  private phantoms = new PhantomField(mulberry32((Math.random() * 0xffffffff) >>> 0));
   private composite!: Composite;
-  /** Seconds since start, for flicker. */
+  /** Map bounds in metres, so drawMap can tell a resize from a redraw. */
+  private worldW = 0;
+  private worldH = 0;
+  /** Seconds since start, for flicker and for memory's clock. */
   private elapsed = 0;
 
   async init(mount: HTMLElement): Promise<void> {
@@ -114,9 +137,12 @@ export class Stage {
     const { width, height } = this.app.screen;
     this.albedoRT = RenderTexture.create({ width, height, resolution: 1 });
     this.lightRT = RenderTexture.create({ width, height, resolution: 1 });
-    this.composite = new Composite(this.albedoRT, this.lightRT);
+    // A one-metre placeholder until drawMap learns the real bounds. The
+    // composite needs a memory texture bound from the first frame, and an empty
+    // one reads as "never seen anything", which is exactly true at that point.
+    this.memory = new MemoryField(1, 1, width, height);
+    this.composite = new Composite(this.albedoRT, this.lightRT, this.memory.viewTexture);
     this.composite.resize(width, height);
-    this.composite.exposure = COMPOSITE_EXPOSURE;
 
     this.labelStyle = new TextStyle({
       fill: COLOUR.label,
@@ -128,6 +154,10 @@ export class Stage {
     this.world.addChild(this.occluders);
     this.world.addChild(this.woodpile);
     this.world.addChild(this.itemLayer);
+    // Phantoms go into the albedo alongside everything else, which is what
+    // makes Q52 work: they are dimmed, drained and warped by the memory layer
+    // exactly as a real creature standing in that same stale ground would be.
+    this.world.addChild(this.phantomLayer);
     this.world.addChild(this.fire);
     this.world.addChild(this.bodies);
 
@@ -156,7 +186,14 @@ export class Stage {
     this.lightRT.destroy(true);
     this.albedoRT = RenderTexture.create({ width, height, resolution: 1 });
     this.lightRT = RenderTexture.create({ width, height, resolution: 1 });
-    this.composite.rebind(this.albedoRT, this.lightRT);
+    // The last-seen texture is world-sized and survives this: resizing the
+    // window must not cost you your memory of the wood.
+    this.memory?.resizeScreen(width, height);
+    this.composite.rebind(
+      this.albedoRT,
+      this.lightRT,
+      this.memory?.viewTexture ?? this.albedoRT,
+    );
     this.composite.resize(width, height);
   }
 
@@ -176,6 +213,16 @@ export class Stage {
   ): void {
     const w = widthM * PIXELS_PER_METRE;
     const h = heightM * PIXELS_PER_METRE;
+
+    // drawMap runs again every time a felled tree clears a tile (Q20), so both
+    // memory stores are sized rather than rebuilt — losing your map because
+    // someone chopped a trunk would be a very strange rule.
+    this.memory?.setWorldSize(widthM, heightM);
+    if (!this.seen || this.worldW !== widthM || this.worldH !== heightM) {
+      this.seen = new SeenField(widthM, heightM);
+      this.worldW = widthM;
+      this.worldH = heightM;
+    }
 
     this.ground.clear();
     this.ground.rect(0, 0, w, h).fill(COLOUR.ground);
@@ -241,10 +288,12 @@ export class Stage {
         .fill(item.kind === 'log' ? COLOUR.log : COLOUR.branch);
     }
 
-    const seen = new Set<string>();
+    // Named for what it holds: the ids drawn this frame. Not to be confused
+    // with `this.seen`, which is the memory field.
+    const drawnIds = new Set<string>();
 
     for (const p of players) {
-      seen.add(p.id);
+      drawnIds.add(p.id);
       let sprite = this.sprites.get(p.id);
 
       if (!sprite) {
@@ -271,7 +320,7 @@ export class Stage {
     }
 
     for (const [id, sprite] of this.sprites) {
-      if (seen.has(id)) continue;
+      if (drawnIds.has(id)) continue;
       sprite.holder.destroy({ children: true });
       this.sprites.delete(id);
     }
@@ -300,28 +349,132 @@ export class Stage {
           flicker(this.elapsed + p.x, LANTERN_FLICKER_HZ, LANTERN_FLICKER_AMPLITUDE),
       });
     }
-    this.lights.update(grid, lights);
+    // Cast once, used three times — the light field draws them, memory stamps
+    // them, and the phantoms are dispelled by them. Casting per consumer would
+    // triple the most expensive work in the frame.
+    const polys = lights.map((l) => visibilityPolygon(grid, l.pos, l.radiusM));
+
+    const camera = cameraTargetM;
+    const offset: Vec2 = camera
+      ? {
+          x: this.app.screen.width / 2 - camera.x * PIXELS_PER_METRE,
+          y: this.app.screen.height / 2 - camera.y * PIXELS_PER_METRE,
+        }
+      : { x: this.world.x, y: this.world.y };
+
+    // What gets committed to memory, and how much of each light commits it.
+    //
+    // Only lights you could actually be looking at refresh your memory (Q53) —
+    // without that gate the bonfire's own polygon keeps camp permanently fresh
+    // from 800m away, which is precisely the kind of lie this system exists to
+    // stop the map telling. And only the properly-lit core of each one records
+    // anything (Q55), so the outer edge of your beam shows you new ground
+    // without yet committing it.
+    const remembered = camera
+      ? lights
+          .map((light, i) => ({
+            pos: light.pos,
+            radiusM: light.radiusM * MEMORY_PROPERLY_LIT_FRAC,
+            full: light.radiusM,
+            poly: polys[i] ?? [],
+          }))
+          .filter((r) => this.onScreen(r.pos, r.full, camera))
+      : [];
+
+    this.memory?.write(
+      this.app.renderer,
+      remembered,
+      remembered.map((r) => r.poly),
+      this.elapsed,
+    );
+    for (const r of remembered) {
+      this.seen?.mark(grid, r.pos, r.radiusM, this.elapsed);
+    }
+
+    // Phantoms move and are dispelled BEFORE they are drawn, so a phantom that
+    // walked into your light this frame never reaches the albedo at all (Q51).
+    this.updatePhantoms(grid, lights, camera, dtSec);
+
+    this.lights.update(lights, polys);
     this.drawFlame(fire);
 
     this.bloom.update(fire, cameraTargetM, this.app.screen, dtSec);
 
-    if (cameraTargetM) {
-      const x = this.app.screen.width / 2 - cameraTargetM.x * PIXELS_PER_METRE;
-      const y = this.app.screen.height / 2 - cameraTargetM.y * PIXELS_PER_METRE;
-      this.world.x = x;
-      this.world.y = y;
-      this.lights.container.x = x;
-      this.lights.container.y = y;
+    if (camera) {
+      this.world.x = offset.x;
+      this.world.y = offset.y;
+      this.lights.container.x = offset.x;
+      this.lights.container.y = offset.y;
     }
 
-    // §24.2 stages 1-5 and 9. Order is not negotiable: albedo and light are
-    // gathered separately so the composite can multiply and then tone-map them.
-    // Tone-mapping before accumulation would flatten the falloff instead of
-    // preventing the clip.
+    // §24.2 stages 1-5 and 9. Order is not negotiable: albedo, light and memory
+    // are gathered separately so the composite can multiply, tone-map and then
+    // cross-fade them. Tone-mapping before accumulation would flatten the
+    // falloff instead of preventing the clip.
     const renderer = this.app.renderer;
     renderer.render({ container: this.world, target: this.albedoRT, clear: true });
     renderer.render({ container: this.lights.container, target: this.lightRT, clear: true });
+    this.memory?.renderView(renderer, this.elapsed, offset);
     renderer.render({ container: this.app.stage });
+  }
+
+  /**
+   * Q54: on revival your memory is wiped, hallucinations and all.
+   *
+   * Death arrives in Step 8; the wipe lives here because it belongs to the
+   * memory system rather than to whatever ends up calling it.
+   */
+  forget(): void {
+    this.memory?.forget(this.app.renderer);
+    this.seen?.forget();
+    this.phantoms.forget();
+  }
+
+  /** Could this light's polygon reach the viewport at all? */
+  private onScreen(pos: Vec2, radiusM: number, camera: Vec2): boolean {
+    const halfW = this.app.screen.width / (2 * PIXELS_PER_METRE);
+    const halfH = this.app.screen.height / (2 * PIXELS_PER_METRE);
+    const slack = radiusM + MEMORY_WRITE_MARGIN_M;
+    return Math.abs(pos.x - camera.x) <= halfW + slack && Math.abs(pos.y - camera.y) <= halfH + slack;
+  }
+
+  /**
+   * Spawn, drift and dispel (Q49–Q52), then draw what survived.
+   *
+   * Note which store answers which question in the env below. `blockedAt` reads
+   * the TRUE occluder grid and `rotAt` reads memory — a phantom is placed by
+   * what you have forgotten and constrained by what is actually there, and the
+   * two are never swapped (Q48).
+   */
+  private updatePhantoms(
+    grid: OccluderGrid,
+    lights: Light[],
+    camera: Vec2 | null,
+    dtSec: number,
+  ): void {
+    this.phantomLayer.clear();
+
+    const seen = this.seen;
+    if (!camera || !seen) return;
+
+    const now = this.elapsed;
+    const env: PhantomEnv = {
+      rotAt: (x, y) => seen.rotAt(x, y, now),
+      seenAt: (x, y) => seen.seenAt(x, y),
+      blockedAt: (x, y) => isBlockedAt(grid, x, y),
+      // Full radii here, not the reduced ones memory records with: Q51 dispels
+      // on any real light touching them, which includes the dim outer edge of
+      // a beam that would never have committed the ground to memory.
+      litAt: (x, y) => lights.some((l) => canSee(grid, l.pos, l.radiusM, { x, y })),
+    };
+
+    this.phantoms.update(env, camera, dtSec);
+
+    for (const phantom of this.phantoms.phantoms) {
+      // Facing the player, because they are always coming toward you (Q50).
+      const facing = Math.atan2(camera.y - phantom.pos.y, camera.x - phantom.pos.x);
+      drawSilhouette(this.phantomLayer, phantom.pos.x, phantom.pos.y, facing);
+    }
   }
 
   /**

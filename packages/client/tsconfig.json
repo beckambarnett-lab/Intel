@@ -4,7 +4,11 @@
     "rootDir": "./src",
     "outDir": "./dist-types",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["vite/client"],
+    // "node" is here for the Q48 boundary test, which reads source files off
+    // disk to prove that memory and collision never meet. Vite still refuses to
+    // bundle a node builtin into the browser, so this widens what typechecks
+    // and not what ships.
+    "types": ["vite/client", "node"],
     "noEmit": false
   },
   "include": ["src/**/*.ts"],
