@@ -4,6 +4,7 @@ import {
   DIRECTOR_REASSIGN_SEC,
   TUBE_ZONES,
   createCreature,
+  isBlockedAt,
 } from '@ember/shared';
 import type { WorldState, ZoneName } from '@ember/shared';
 
@@ -28,21 +29,35 @@ export class ScriptedDirector {
   private sinceReassignSec = 0;
   private rotation = 0;
 
-  /** Populate the world with its hunters (Q56). Idempotent. */
+  /**
+   * Populate the world with its hunters (Q56). Idempotent.
+   *
+   * They start IN their assigned zone, not at the lair. Spawning the whole
+   * roster at the far end meant every creature opened the run with a walk of up
+   * to 900m before it reached the ground it was supposed to be patrolling, so
+   * for the first several minutes the map was simply empty.
+   *
+   * Q57 governs *respawn* — a killed creature does come back from the lair, and
+   * that is untouched. This is only where they begin.
+   */
   spawn(world: WorldState): void {
     if (Object.keys(world.creatures).length > 0) return;
 
-    const lair = TUBE_ZONES.find((z) => z.name === 'lair');
-    const from = lair?.from ?? 0;
-    const to = lair?.to ?? 0;
-
     for (let i = 0; i < CREATURE_COUNT; i++) {
       const id = `c${i + 1}`;
-      // Spread along the lair end rather than stacked on one point, so the
-      // opening minutes are not four creatures walking in single file.
-      const x = from + ((i + 1) / (CREATURE_COUNT + 1)) * (to - from);
-      const y = world.bounds.h / 2;
-      world.creatures[id] = createCreature(id, { x, y }, this.zoneFor(i));
+      const zoneName = this.zoneFor(i);
+      const zone = TUBE_ZONES.find((z) => z.name === zoneName);
+      const from = zone?.from ?? 0;
+      const to = zone?.to ?? 0;
+
+      // Toward the FAR edge of the zone, offset per creature so two sharing a
+      // zone are not stacked. Far rather than centred because the camp zone
+      // reaches to x=0 and the bonfire sits at x=40 — a centred spawn there
+      // would put a hunter ten metres from the fire on the first tick, which is
+      // not an opening, it is an ambush.
+      const t = 0.7 + 0.25 * (i / Math.max(1, CREATURE_COUNT));
+      const x = from + t * (to - from);
+      world.creatures[id] = createCreature(id, { x, y: this.clearY(world, x) }, zoneName);
     }
   }
 
@@ -63,6 +78,25 @@ export class ScriptedDirector {
       if (!c) continue;
       c.order = { verb: 'PATROL', zone: this.zoneFor(i + this.rotation) };
     }
+  }
+
+  /**
+   * A walkable y at this x, searched outward from the tube's centre line.
+   *
+   * The centre is nearly always clear, but rock is placed procedurally (Q107)
+   * and a creature that spawns inside a boulder is stuck against it for the
+   * whole run.
+   */
+  private clearY(world: WorldState, x: number): number {
+    const mid = world.bounds.h / 2;
+    if (!isBlockedAt(world.grid, x, mid)) return mid;
+
+    for (let offset = 1; offset < world.bounds.h / 2; offset += 1) {
+      if (!isBlockedAt(world.grid, x, mid + offset)) return mid + offset;
+      if (!isBlockedAt(world.grid, x, mid - offset)) return mid - offset;
+    }
+
+    return mid;
   }
 
   private zoneFor(index: number): ZoneName {

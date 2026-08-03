@@ -38,10 +38,13 @@ export const INTERP_MAX_EXTRAPOLATION_MS = 250;
  * Not a DESIGN.md decision — Q31 fixes the load *curve*, not the base — so this
  * is pure feel. Raised from 4.2 after playtesting: the tube is 1200m long and
  * the camera shows about 120m of it, which made the original figure read as a
- * trudge even at a sprint. Creature speeds are multiples of this (Q61), so they
- * scale with it and the "you cannot outrun one" relationship is preserved.
+ * trudge even at a sprint. Raised again to 7 after the second playtest — the
+ * camera shows about 120m of a 1200m map and you cross it many times a run.
+ *
+ * Creature speeds are multiples of this (Q61), so they scale with it and the
+ * "you cannot outrun one" relationship is preserved automatically.
  */
-export const PLAYER_WALK_SPEED = 5.2;
+export const PLAYER_WALK_SPEED = 7;
 
 /** Sprint multiplier. Only available under 50% load (Q32). */
 export const PLAYER_SPRINT_MULT = 1.6;
@@ -438,9 +441,21 @@ export const SOUND_RADIUS_GROWL_M = 20;
 export const CREATURE_COUNT = 4; // Q56
 export const CREATURE_RESPAWN_SEC = 300; // Q57 — killed creatures return from the lair
 
-/** Speed as a multiple of an unloaded player's walk (Q61). */
-export const CREATURE_PATROL_SPEED_MULT = 0.9;
-export const CREATURE_PURSUE_SPEED_MULT = 1.15;
+/**
+ * Speed as a multiple of an unloaded player's walk.
+ *
+ * DESIGN CHANGE overriding Q61's 0.9 / 1.15. Those numbers made a patrolling
+ * creature slower than a walking player, which on a 1200m map meant they took
+ * minutes to cross their own zone and read as scenery rather than as hunters.
+ *
+ * The relationship Q61 actually cares about is preserved and sharpened: at 1.5
+ * you cannot outrun a pursuit at a walk, and a player at full sprint (1.6) only
+ * just edges one — which is exactly the margin Q32 then takes away by locking
+ * sprint above half load. Carrying wood, you still cannot run. You break line
+ * of sight or you die.
+ */
+export const CREATURE_PATROL_SPEED_MULT = 1.1;
+export const CREATURE_PURSUE_SPEED_MULT = 1.5;
 
 /**
  * Body radius for collision.
@@ -555,7 +570,7 @@ export const CREATURE_SNIFF_MAX_SEC = 4;
 export const CREATURE_DESPERATE_HITS = 3;
 
 /** Desperate is faster and much louder than anything else it does (Q70). */
-export const CREATURE_DESPERATE_SPEED_MULT = 1.35;
+export const CREATURE_DESPERATE_SPEED_MULT = 1.8;
 export const CREATURE_DESPERATE_NOISE_MULT = 2.5;
 
 /** How far outside its assigned zone it will drift before heading back (Q60: Return). */
@@ -582,10 +597,19 @@ export const DIRECTOR_REASSIGN_SEC = 12;
 
 /**
  * Zones the scripted director will send creatures to, in the order it fills
- * them. Weighted toward the near wood because that is where players are for
- * most of a run — a patrol in the lair menaces nobody.
+ * them.
+ *
+ * `camp` is first and it is not optional. Without it the nearest patrol was
+ * nearWood, which starts at x=150 while the bonfire sits at x=40 — 110m away,
+ * against 60m of sight. A player who stayed near their own fire would never
+ * meet a creature at all, at any speed, and both the Siege state (Q60) and the
+ * woodpile sabotage (Q24) were unreachable code.
+ *
+ * They still cannot cross the safe radius while the fire holds (Q7), so a
+ * camp-assigned creature circles the firelight rather than walking in. That is
+ * the siege, and it is meant to be something you watch happen.
  */
-export const DIRECTOR_PATROL_ZONES = ['nearWood', 'ruins', 'nearWood', 'deepWood'] as const;
+export const DIRECTOR_PATROL_ZONES = ['camp', 'nearWood', 'ruins', 'nearWood'] as const;
 
 // ---------------------------------------------------------------------------
 // World (§14)
