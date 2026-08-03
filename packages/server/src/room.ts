@@ -199,6 +199,7 @@ export class Room {
     // join in between, and they must not see an unlit camp.
     refreshFire(this.world.fire);
     this.world.creatures = {};
+    this.world.droppedLanterns = {};
     this.director = new ScriptedDirector();
     this.director.spawn(this.world);
 
@@ -286,6 +287,7 @@ export class Room {
       const items = this.visibility.visibleItemsTo(this.world, conn.playerId, now);
       const felled = this.visibility.visibleFelledTilesTo(this.world, conn.playerId);
       const creatures = this.visibility.visibleCreaturesTo(this.world, conn.playerId, now);
+      const lanterns = this.visibility.visibleLanternsTo(this.world, conn.playerId, now);
 
       conn.socket.send(
         encode({
@@ -296,6 +298,7 @@ export class Room {
           items,
           felled,
           creatures,
+          lanterns,
           woodpile: this.woodpileViewFor(conn.playerId),
           fire: fireViewFor(this.world, conn.playerId),
           outcome: this.world.outcome,

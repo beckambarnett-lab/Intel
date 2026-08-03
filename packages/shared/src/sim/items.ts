@@ -1,4 +1,8 @@
 import {
+  LANTERN_PICKUP_RANGE_M,
+  LANTERN_REFUEL_HOLD_SEC,
+  LANTERN_REFUEL_PER_LOG,
+  LANTERN_REFUEL_RATE,
   CHOP_SWINGS,
   DEPOSIT_RANGE_M,
   DEPOSIT_SEC_PER_ITEM,
@@ -14,8 +18,16 @@ import {
 import type { MapDef } from '../grid.js';
 import { distance } from '../math.js';
 import type { Vec2 } from '../math.js';
-import { ITEM_KINDS, carriedCount } from '../types.js';
-import type { Carrying, ItemKind, TickInputs, WorldItem, WorldState } from '../types.js';
+import { ITEM_KINDS, carriedCount, emptyLantern } from '../types.js';
+import type {
+  Carrying,
+  DroppedLantern,
+  ItemKind,
+  Player,
+  TickInputs,
+  WorldItem,
+  WorldState,
+} from '../types.js';
 import { refreshFire } from './fire.js';
 
 /**
@@ -119,6 +131,15 @@ export function items(world: WorldState, inputs: TickInputs, dt: number): void {
       player.depositProgress = 0;
     }
 
+    // Q41: deliberate, edge-triggered, and not a channel.
+    if (frame?.dropLantern === true) toggleLantern(world, player);
+
+    // Q39: refuelling is its own key and runs anywhere, so it is resolved
+    // before the interact chain rather than competing with it.
+    refuelLantern(world, player, frame?.refuel === true, dt);
+
+    // Interact and refuel are different keys, so `E` no longer owns the refuel
+    // channel — refuelLantern above is the only thing that touches its state.
     const holding = frame?.interact === true;
     if (!holding) {
       player.stokeProgress = 0;
@@ -128,7 +149,108 @@ export function items(world: WorldState, inputs: TickInputs, dt: number): void {
 
     if (tryStoke(world, player.id, dt)) continue;
     if (tryDeposit(world, player.id, dt)) continue;
+    if (tryTakeLantern(world, player.id)) continue;
     tryPickup(world, player.id);
+  }
+}
+
+/**
+ * Q41: put the lantern down, or pick one back up.
+ *
+ * Edge-triggered and outside the interact chain, because it is not a channel —
+ * you should be able to set a decoy and be moving in the same tick.
+ */
+function toggleLantern(world: WorldState, player: Player): void {
+  if (player.hasLantern) {
+    const id = `dl${world.nextItemId++}`;
+    world.droppedLanterns[id] = {
+      id,
+      pos: { x: player.pos.x, y: player.pos.y },
+      // The lantern goes down exactly as it was: same stage, same fuel. A decoy
+      // is only worth setting if it keeps throwing the light you were using.
+      lantern: structuredClone(player.lantern),
+    };
+    player.lantern = emptyLantern();
+    player.hasLantern = false;
+    player.refuelProgress = 0;
+    return;
+  }
+
+  const nearest = nearestDroppedLantern(world, player.pos);
+  if (!nearest) return;
+  player.lantern = structuredClone(nearest.lantern);
+  player.hasLantern = true;
+  delete world.droppedLanterns[nearest.id];
+}
+
+/** The closest dropped lantern within arm's reach, or null. */
+export function nearestDroppedLantern(world: WorldState, pos: Vec2): DroppedLantern | null {
+  let best: DroppedLantern | null = null;
+  let bestDist = LANTERN_PICKUP_RANGE_M;
+
+  for (const id of Object.keys(world.droppedLanterns)) {
+    const dl = world.droppedLanterns[id];
+    if (!dl) continue;
+    const d = distance(dl.pos, pos);
+    if (d > bestDist) continue;
+    best = dl;
+    bestDist = d;
+  }
+
+  return best;
+}
+
+/** Picking one up is an interact, so it does not fight with the `G` toggle. */
+function tryTakeLantern(world: WorldState, playerId: string): boolean {
+  const player = world.players[playerId];
+  if (!player || player.hasLantern) return false;
+  if (!nearestDroppedLantern(world, player.pos)) return false;
+  toggleLantern(world, player);
+  return true;
+}
+
+/**
+ * Q39: hold `F` and wood goes in, anywhere.
+ *
+ * Continuous rather than a discrete channel per log. Holding a key and watching
+ * a level climb is a different feel from committing to a 1.5s animation, and it
+ * is the one that makes "how much light do I want to buy right now" a decision
+ * you make with your thumb. Q39's numbers still set the rate.
+ *
+ * There is no ceiling. Overfill it if you like — every unit you pour in is one
+ * the bonfire does not get (L6), and that trade is the whole point.
+ */
+function refuelLantern(
+  world: WorldState,
+  player: Player,
+  holding: boolean,
+  dt: number,
+): void {
+  if (!holding || !player.hasLantern) {
+    player.refuelProgress = 0;
+    return;
+  }
+
+  // The wind-up. Long enough that cycling the shutter never costs you a log.
+  player.refuelProgress += dt;
+  if (player.refuelProgress < LANTERN_REFUEL_HOLD_SEC) return;
+
+  let toPour = LANTERN_REFUEL_RATE * dt;
+
+  while (toPour > 0) {
+    // A log leaves your hands when it starts going in, and its units flow over
+    // the next second and a half. Letting go keeps the remainder on you, so an
+    // interrupted refuel costs the time and not the wood.
+    if (player.refuelPartial <= 0) {
+      if (player.carrying.log <= 0) return;
+      player.carrying.log--;
+      player.refuelPartial = LANTERN_REFUEL_PER_LOG;
+    }
+
+    const take = Math.min(toPour, player.refuelPartial);
+    player.lantern.fuel += take;
+    player.refuelPartial -= take;
+    toPour -= take;
   }
 }
 

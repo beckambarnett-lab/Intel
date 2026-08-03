@@ -99,7 +99,7 @@ export function creatureSense(world: WorldState, dt: number): void {
 }
 
 /**
- * The nearest player whose light this creature can actually see.
+ * The nearest light this creature can actually see.
  *
  * Detection range comes from the lantern itself (Q37/Q59) — hooded is 4m, full
  * is 45m, wider still mid-bloom — plus line of sight through the true grid. A player standing in
@@ -131,6 +131,23 @@ function brightestVisiblePlayer(world: WorldState, c: Creature, fireFrac: number
     if (!raycastLOS(world.grid, c.pos, p.pos)) continue;
 
     best = p.pos;
+    bestDist = d;
+  }
+
+  // Q41: a lantern on the ground keeps drawing them exactly as a held one
+  // does. This is the line that makes a decoy work — and it is deliberately
+  // the same test, so a creature cannot tell the difference between a lantern
+  // you are holding and one you left behind.
+  for (const id of Object.keys(world.droppedLanterns)) {
+    const dl = world.droppedLanterns[id];
+    if (!dl) continue;
+
+    const range = lanternSeenAt(dl.lantern);
+    const d = Math.hypot(dl.pos.x - c.pos.x, dl.pos.y - c.pos.y);
+    if (d > range || d >= bestDist) continue;
+    if (!raycastLOS(world.grid, c.pos, dl.pos)) continue;
+
+    best = dl.pos;
     bestDist = d;
   }
 

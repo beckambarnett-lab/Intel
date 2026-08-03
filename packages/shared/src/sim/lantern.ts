@@ -93,6 +93,37 @@ export function isOpening(ls: LanternState): boolean {
  * now, not where they were.
  */
 export function lantern(world: WorldState, dt: number): void {
+  // Q41: a lantern you put down keeps burning. It has no shutter intent to
+  // consume — nobody is holding it — so it only ever drains and gutters out.
+  for (const id of Object.keys(world.droppedLanterns)) {
+    const dropped = world.droppedLanterns[id];
+    if (!dropped) continue;
+    burnDropped(dropped.lantern, dt);
+  }
+
+  heldLanterns(world, dt);
+}
+
+/**
+ * Burn a lantern nobody is holding.
+ *
+ * No shutter handling: it was set to a stage when it was put down and it stays
+ * there. It drains at that stage and gutters out, which is what gives a decoy a
+ * lifetime — set one to full and it is bright and brief, set it to low and it
+ * holds a creature's attention for ten minutes.
+ */
+function burnDropped(ls: LanternState, dt: number): void {
+  if (ls.bloom > 0) ls.bloom = Math.max(0, ls.bloom - dt);
+  if (ls.fuel <= 0) return;
+
+  ls.fuel = Math.max(0, ls.fuel - LANTERN_STAGES[ls.stage].burnPerSec * dt);
+  if (ls.fuel <= 0) {
+    ls.stage = 'hooded';
+    ls.target = 'hooded';
+  }
+}
+
+function heldLanterns(world: WorldState, dt: number): void {
   for (const id of Object.keys(world.players)) {
     const player = world.players[id];
     if (!player) continue;
@@ -127,7 +158,7 @@ export function lantern(world: WorldState, dt: number): void {
     ls.fuel = Math.max(0, ls.fuel - burn);
 
     if (ls.fuel <= 0) {
-      // Dry. It gutters shut on its own, and refuelling (Q39) is Step 4.
+      // Dry. It gutters shut on its own; feed it a log to bring it back (Q39).
       ls.stage = 'hooded';
       ls.target = 'hooded';
       ls.transition = 0;

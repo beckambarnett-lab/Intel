@@ -20,7 +20,7 @@ import {
   mulberry32,
   visibilityPolygon,
 } from '@ember/shared';
-import type { FireView, OccluderGrid, Vec2, WorldItem } from '@ember/shared';
+import type { DroppedLanternView, FireView, OccluderGrid, Vec2, WorldItem } from '@ember/shared';
 import { Application, Container, Graphics, RenderTexture, Text, TextStyle } from 'pixi.js';
 import type { RenderedCreature, RenderedPlayer } from '../net.js';
 import { Composite } from './composite.js';
@@ -48,6 +48,9 @@ function flicker(tSec: number, hz: number, amplitude: number): number {
 /** Radius of a dropped item's marker, metres. */
 const ITEM_DOT_M = { log: 0.22, branch: 0.14 } as const;
 
+/** A lantern set down on the ground (Q41). */
+const DROPPED_LANTERN_DOT_M = 0.26;
+
 /**
  * Albedo, not screen colour.
  *
@@ -70,6 +73,7 @@ const COLOUR = {
   localPlayer: 0xffb454, // firelight orange — the one warm colour (Q128)
   remotePlayer: 0xa8b6c6,
   label: 0xc8c4bd,
+  droppedLantern: 0xffdca8,
 } as const;
 
 /**
@@ -311,6 +315,7 @@ export class Stage {
     fire: FireView | null,
     players: RenderedPlayer[],
     creatures: RenderedCreature[],
+    lanterns: DroppedLanternView[],
     worldItems: WorldItem[],
     cameraTargetM: { x: number; y: number } | null,
     dtSec: number,
@@ -326,6 +331,13 @@ export class Stage {
     // is invisible even though we hold it in memory — and the server did not
     // send it anyway (Q21).
     this.itemLayer.clear();
+    for (const dl of lanterns) {
+      // A small warm body so a decoy reads as an object you left, not as a
+      // patch of ground that happens to be lit.
+      this.itemLayer
+        .circle(dl.pos.x * PIXELS_PER_METRE, dl.pos.y * PIXELS_PER_METRE, DROPPED_LANTERN_DOT_M * PIXELS_PER_METRE)
+        .fill(COLOUR.droppedLantern);
+    }
     for (const item of worldItems) {
       const r = (item.kind === 'log' ? ITEM_DOT_M.log : ITEM_DOT_M.branch) * PIXELS_PER_METRE;
       this.itemLayer
@@ -394,6 +406,21 @@ export class Stage {
           flicker(this.elapsed + p.x, LANTERN_FLICKER_HZ, LANTERN_FLICKER_AMPLITUDE),
       });
     }
+    // Q41: a lantern on the ground throws exactly the light it threw in your
+    // hand. Added to the same list, so it casts the same shadows, writes the
+    // same memory and dispels the same phantoms — a decoy is a real light.
+    for (const dl of lanterns) {
+      if (dl.radiusM <= 0) continue;
+      lights.push({
+        pos: dl.pos,
+        radiusM: dl.radiusM,
+        colour: LANTERN_LIGHT_COLOUR,
+        intensity:
+          LANTERN_LIGHT_INTENSITY *
+          flicker(this.elapsed + dl.pos.x, LANTERN_FLICKER_HZ, LANTERN_FLICKER_AMPLITUDE),
+      });
+    }
+
     // Cast once, used three times — the light field draws them, memory stamps
     // them, and the phantoms are dispelled by them. Casting per consumer would
     // triple the most expensive work in the frame.

@@ -3,9 +3,11 @@ import {
   VISIBILITY_HYSTERESIS_MS,
   canSee,
   lanternRadius,
+  lanternSeenAt,
 } from '@ember/shared';
 import type {
   CreatureView,
+  DroppedLanternView,
   FireView,
   Player,
   PlayerId,
@@ -235,6 +237,49 @@ export class VisibilityIndex {
       const last = this.lastSeenAt.get(key);
       if (last !== undefined && nowMs - last < VISIBILITY_HYSTERESIS_MS) {
         out.push({ id: c.id, pos: { ...c.pos }, state: c.state });
+      }
+    }
+
+    return out;
+  }
+
+  /**
+   * Lanterns on the ground this player can see (Q41).
+   *
+   * A burning lantern is a light source, so the question is whether you have a
+   * clear line to it inside the range it can be seen from (Q37/Q45) — not
+   * whether it happens to fall inside your own beam. A dark one, burnt out or
+   * hooded to nothing, is culled like any other object in the dark.
+   */
+  visibleLanternsTo(world: WorldState, viewerId: PlayerId, nowMs: number): DroppedLanternView[] {
+    const viewer = world.players[viewerId];
+    if (!viewer) return [];
+
+    const out: DroppedLanternView[] = [];
+    const lantern = lanternRadius(viewer.lantern);
+    const fire = world.fire;
+
+    for (const id of Object.keys(world.droppedLanterns)) {
+      const dl = world.droppedLanterns[id];
+      if (!dl) continue;
+
+      const key = `${viewerId}|lantern:${id}`;
+      const seenAt = lanternSeenAt(dl.lantern);
+      const visible =
+        (seenAt > 0 && canSee(world.grid, dl.pos, seenAt, viewer.pos)) ||
+        canSee(world.grid, viewer.pos, lantern, dl.pos) ||
+        (canSee(world.grid, fire.pos, fire.lightRadiusM, dl.pos) &&
+          canSee(world.grid, viewer.pos, LIT_FIGURE_VISIBLE_M, dl.pos));
+
+      if (visible) {
+        this.lastSeenAt.set(key, nowMs);
+        out.push({ id: dl.id, pos: { ...dl.pos }, radiusM: lanternRadius(dl.lantern) });
+        continue;
+      }
+
+      const last = this.lastSeenAt.get(key);
+      if (last !== undefined && nowMs - last < VISIBILITY_HYSTERESIS_MS) {
+        out.push({ id: dl.id, pos: { ...dl.pos }, radiusM: lanternRadius(dl.lantern) });
       }
     }
 

@@ -45,6 +45,21 @@ export interface InputFrame {
    * tick, and a held key would re-dump every frame you kept it down.
    */
   panicDrop: boolean;
+  /**
+   * `F` held (Q39). Held rather than an edge because refuelling is a channel:
+   * the same key's *press* cycles the shutter, and only sustained pressure
+   * starts putting wood in.
+   */
+  refuel: boolean;
+  /**
+   * `G` pressed — put the lantern down, or pick one back up (Q41).
+   *
+   * Separate from the panic drop on purpose. Q35's key dumps everything you are
+   * carrying in one tick precisely so it can be mashed under pressure, and
+   * having that also throw away your only light source would make it unusable
+   * in the situation it exists for.
+   */
+  dropLantern: boolean;
 }
 
 export function emptyInput(seq: number): InputFrame {
@@ -57,6 +72,8 @@ export function emptyInput(seq: number): InputFrame {
     shutter: false,
     interact: false,
     panicDrop: false,
+    refuel: false,
+    dropLantern: false,
   };
 }
 
@@ -131,6 +148,18 @@ export interface Player {
   depositProgress: number;
   /** Chopping state (Q16). Null when not swinging at anything. */
   chop: ChopState | null;
+  /** Seconds `F` has been held. Wood starts flowing past the wind-up (Q39). */
+  refuelProgress: number;
+  /** Units left of the log currently going into the lantern. */
+  refuelPartial: number;
+  /**
+   * Q41: you can put the lantern down as a decoy and walk away from it.
+   *
+   * While false, `lantern` is a dry placeholder — which is what makes every
+   * radius and detection-range call site keep working without knowing this flag
+   * exists. The real state lives on the DroppedLantern until you pick it up.
+   */
+  hasLantern: boolean;
   /**
    * Q62: contact with a creature kills you. There is no downed state — the
    * ghost is the second chance (L16), and it arrives in Step 8.
@@ -247,6 +276,9 @@ export function createPlayer(id: PlayerId, name: string, pos: Vec2): Player {
     stokeProgress: 0,
     depositProgress: 0,
     chop: null,
+    refuelProgress: 0,
+    refuelPartial: 0,
+    hasLantern: true,
     alive: true,
   };
 }
@@ -305,6 +337,14 @@ export interface WorldState {
   trees: Record<string, Tree>;
   /** The hunters (§8). Four of them (Q56), simulated only on the server. */
   creatures: Record<string, Creature>;
+  /**
+   * Lanterns lying on the ground, still burning (Q41).
+   *
+   * They keep drawing creatures exactly as a held one does, which is the whole
+   * point of putting one down: it is the cheapest way to move a hunter off a
+   * route, and it costs you the light you were using to see by.
+   */
+  droppedLanterns: Record<string, DroppedLantern>;
   /**
    * Noises made this tick, and only this tick (§21 tick order, stage 4).
    *
@@ -367,6 +407,7 @@ export function createWorld(
     items: {},
     trees: {},
     creatures: {},
+    droppedLanterns: {},
     sounds: [],
     nextItemId: 1,
     outcome: null,
@@ -488,4 +529,28 @@ export interface Creature {
 
   /** The standing order from the director. */
   order: CreatureOrder;
+}
+
+
+/**
+ * A lantern on the ground, still lit (Q41).
+ *
+ * It burns its tank down at the stage it was set to and goes dark when it runs
+ * out, so a decoy has a lifetime and leaving one behind is a real cost rather
+ * than a free distraction.
+ */
+export interface DroppedLantern {
+  id: string;
+  pos: Vec2;
+  lantern: LanternState;
+}
+
+/** A lantern with nothing in it. What a player holds after putting theirs down. */
+export function emptyLantern(): LanternState {
+  const ls = createLantern();
+  ls.fuel = 0;
+  ls.bloom = 0;
+  ls.transition = 0;
+  ls.cycleRequested = false;
+  return ls;
 }

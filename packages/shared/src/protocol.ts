@@ -11,7 +11,7 @@ import type {
   WorldItem,
 } from './types.js';
 
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 /**
  * What a client is told about the fire.
@@ -52,6 +52,21 @@ export interface CreatureView {
   id: string;
   pos: Vec2;
   state: CreatureState;
+}
+
+/**
+ * A lantern burning on the ground, as someone who can see it may know it (Q41).
+ *
+ * Culled like everything else, but it is its own light source, so the test is
+ * whether YOU can see IT rather than whether it falls inside something else's
+ * beam. A lit lantern across the wood is exactly as visible as Q45 says a
+ * teammate's is — which is what lets a decoy work on players as well as
+ * creatures.
+ */
+export interface DroppedLanternView {
+  id: string;
+  pos: Vec2;
+  radiusM: number;
 }
 
 export type ClientMsg =
@@ -123,6 +138,8 @@ export type ServerMsg =
        * dark worth being afraid of.
        */
       creatures: CreatureView[];
+      /** Lanterns burning on the ground that this player can see (Q41). */
+      lanterns: DroppedLanternView[];
       /** The camp woodpile's contents. Only sent while you can see the pile. */
       woodpile: Carrying | null;
       fire: FireView;

@@ -70,7 +70,16 @@ async function main(): Promise<void> {
     const me = players.find((p) => p.isLocal) ?? null;
     // Real elapsed time, not the fixed sim step: flicker and the bloom fade are
     // presentation and should run at display rate rather than at 20Hz.
-    stage.render(net.grid, net.fire, players, creatures, net.visibleItems, me, elapsed / 1000);
+    stage.render(
+      net.grid,
+      net.fire,
+      players,
+      creatures,
+      net.droppedLanterns,
+      net.visibleItems,
+      me,
+      elapsed / 1000,
+    );
 
     hud.textContent = formatHud(net);
     requestAnimationFrame(frame);
@@ -92,6 +101,7 @@ function formatHud(net: NetClient): string {
   if (lantern) {
     const moving = lantern.transition > 0 ? ` -> ${lantern.target}` : '';
     const flare = lantern.bloom > 0 ? '  BLOOM' : '';
+    if (net.me && !net.me.hasLantern) lines.push('lantern SET DOWN — G to pick it back up');
     lines.push(
       `lantern ${lantern.stage}${moving}  fuel ${lantern.fuel.toFixed(1)}  radius ${lanternRadius(lantern).toFixed(1)}m${flare}`,
     );

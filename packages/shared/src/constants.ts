@@ -32,8 +32,16 @@ export const INTERP_MAX_EXTRAPOLATION_MS = 250;
 // Movement (§5, Q31, Q32, Q61)
 // ---------------------------------------------------------------------------
 
-/** Unloaded walk speed, metres/second. */
-export const PLAYER_WALK_SPEED = 4.2;
+/**
+ * Unloaded walk speed, metres/second.
+ *
+ * Not a DESIGN.md decision — Q31 fixes the load *curve*, not the base — so this
+ * is pure feel. Raised from 4.2 after playtesting: the tube is 1200m long and
+ * the camera shows about 120m of it, which made the original figure read as a
+ * trudge even at a sprint. Creature speeds are multiples of this (Q61), so they
+ * scale with it and the "you cannot outrun one" relationship is preserved.
+ */
+export const PLAYER_WALK_SPEED = 5.2;
 
 /** Sprint multiplier. Only available under 50% load (Q32). */
 export const PLAYER_SPRINT_MULT = 1.6;
@@ -180,8 +188,50 @@ export const LANTERN_STAGES = {
   full: { radiusM: 9, burnPerSec: 0.25, seenAtM: 45 },
 } as const;
 
-export const LANTERN_TANK = 50; // Q38
-export const LANTERN_REFUEL_SEC = 1.5; // Q39
+/**
+ * What the lantern starts a run holding (Q38).
+ *
+ * Not a ceiling. You can keep feeding it and it keeps taking wood — the limit
+ * on light is how fast you burn through your supply, never a cap on how much
+ * you may pour in.
+ */
+export const LANTERN_TANK = 50;
+/** Seconds one log takes to go in (Q39). */
+export const LANTERN_REFUEL_SEC = 1.5;
+
+/**
+ * How long `F` must be held before wood starts going in.
+ *
+ * `F` is one key doing two jobs: a tap cycles the shutter (Q126), a hold feeds
+ * the lantern. This is the gap between them, and it has to be long enough that
+ * a shutter cycle mid-chase never accidentally eats a log.
+ */
+export const LANTERN_REFUEL_HOLD_SEC = 0.5;
+
+/**
+ * Units per second once it is going. Derived from Q39's "1 log, 1.5s" so the
+ * stated figure stays the tuning surface even though the feel is continuous.
+ */
+export const LANTERN_REFUEL_RATE = 25 / 1.5;
+
+/**
+ * Lantern units one log is worth (Q39).
+ *
+ * Deliberately the same number as the fire's log value (Q10) — that is the
+ * point of L6. Every log you burn for light is a log the fire does not get, and
+ * the two economies have to be denominated identically for that trade to be
+ * legible while you are making it.
+ */
+export const LANTERN_REFUEL_PER_LOG = 25;
+
+/**
+ * How close you must be to pick a dropped lantern back up (Q41).
+ *
+ * Its own range, not PICKUP_RANGE_M: a lantern on the ground is a thing you can
+ * see burning, and having to stand exactly on it to retrieve it makes a decoy
+ * too risky to ever be worth setting.
+ */
+export const LANTERN_PICKUP_RANGE_M = 1.6;
 export const LANTERN_SHUTTER_SEC = 0.3; // Q40
 
 /** Shutter cycle order. `F` steps forward through this and wraps (Q126). */
@@ -340,13 +390,21 @@ export const PHANTOM_SPAWN_ATTEMPTS = 12;
 export const PHANTOM_MIN_ROT = 0.35;
 
 /**
- * The figure. Same silhouette a dimly-lit creature will use in Step 6 — Q52
- * turns on the two being indistinguishable, so they share one renderer.
+ * The figure — hulking, long-limbed, low to the ground.
+ *
+ * One set of dimensions for phantoms and creatures both, because Q52 turns on
+ * the two being indistinguishable. Scaling these scales the thing you glimpse
+ * in rotten memory AND the thing that kills you, together, which is the only
+ * way that guarantee survives contact with art direction.
+ *
+ * Sized well past a person deliberately. You cannot outrun one (Q61) and the
+ * counter is to break line of sight and go dark (L12) — the silhouette should
+ * make that obvious the first time you see one rather than after it kills you.
  */
-export const SILHOUETTE_BODY_M = 0.42;
-export const SILHOUETTE_HEAD_M = 0.2;
-export const SILHOUETTE_LIMB_M = 0.55;
-export const SILHOUETTE_ALBEDO = 0xbcb3a6;
+export const SILHOUETTE_BODY_M = 0.74;
+export const SILHOUETTE_HEAD_M = 0.26;
+export const SILHOUETTE_LIMB_M = 1.15;
+export const SILHOUETTE_ALBEDO = 0xcfc5b6;
 
 // ---------------------------------------------------------------------------
 // Sound (§9, Q58)
@@ -384,11 +442,18 @@ export const CREATURE_RESPAWN_SEC = 300; // Q57 — killed creatures return from
 export const CREATURE_PATROL_SPEED_MULT = 0.9;
 export const CREATURE_PURSUE_SPEED_MULT = 1.15;
 
-/** Body radius for collision. Slightly wider than a player. */
-export const CREATURE_RADIUS = 0.4;
+/**
+ * Body radius for collision.
+ *
+ * Substantially wider than a player's 0.35. DESIGN.md never specifies a
+ * creature's size, and person-sized was the wrong read: Q61 makes it faster
+ * than you and unoutrunnable, so it should look like the thing that fact is
+ * true of. A wide body also means it fouls on trunks in a way you can exploit.
+ */
+export const CREATURE_RADIUS = 0.62;
 
-/** Close enough to kill you (Q62). */
-export const CREATURE_CONTACT_M = 0.9;
+/** Close enough to kill you (Q62). Longer reach than a person has. */
+export const CREATURE_CONTACT_M = 1.2;
 
 /** Close enough to consider a destination reached. */
 export const CREATURE_ARRIVE_M = 1.2;

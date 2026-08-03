@@ -46,6 +46,7 @@ export class InputSource {
 
     const shutter = this.edges.delete('KeyF');
     const panicDrop = this.edges.delete('KeyQ');
+    const dropLantern = this.edges.delete('KeyG');
 
     return {
       seq,
@@ -58,12 +59,17 @@ export class InputSource {
       // go is what interrupts them (Q8, Q16).
       interact: this.held.has('KeyE'),
       panicDrop,
+      // `F` does both jobs: the edge above cycles the shutter, holding it feeds
+      // the lantern. The sim waits out LANTERN_REFUEL_HOLD_SEC before any wood
+      // actually goes in, so a tap is never also a refuel.
+      refuel: this.held.has('KeyF'),
+      dropLantern,
     };
   }
 }
 
-/** `F` cycles the shutter, `Q` panic-drops (Q126, Q35). */
-const EDGE_KEYS = new Set(['KeyF', 'KeyQ']);
+/** `F` cycles the shutter, `Q` panic-drops, `G` sets down the lantern (Q126, Q35, Q41). */
+const EDGE_KEYS = new Set(['KeyF', 'KeyQ', 'KeyG']);
 
 const MOVEMENT_KEYS = new Set([
   'KeyW',

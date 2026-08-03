@@ -17,6 +17,7 @@ import type {
   Carrying,
   ClientMsg,
   CreatureView,
+  DroppedLanternView,
   FireView,
   InputFrame,
   LanternState,
@@ -111,6 +112,15 @@ export class NetClient {
 
   /** The woodpile's contents, or null when we cannot see the pile. */
   woodpileContents: Carrying | null = null;
+
+  /**
+   * Lanterns burning on the ground (Q41).
+   *
+   * Not interpolated — they do not move. Replaced wholesale each snapshot, so
+   * one that drops out of the list has left our sight and leaves the screen
+   * with it.
+   */
+  droppedLanterns: DroppedLanternView[] = [];
 
   private fireView: FireView | null = null;
 
@@ -260,6 +270,7 @@ export class NetClient {
 
         this.reconcile(msg.players, msg.ack);
         this.applyCreatures(msg.creatures);
+        this.droppedLanterns = msg.lanterns;
         this.applyFireView(msg.fire);
         this.applyWorldItems(msg.items, msg.felled);
         this.woodpileContents = msg.woodpile;
