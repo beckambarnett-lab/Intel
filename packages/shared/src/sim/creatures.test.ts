@@ -9,13 +9,20 @@ import {
   CREATURE_SOUND_MEMORY_SEC,
   FIRE_CAPACITY,
   CREATURE_DARK_SIGHT_M,
+  CREATURE_SIEGE_RANGE_M,
   OCCLUDER_OPAQUE,
   TICK_DT,
 } from '../constants.js';
 import { setTile } from '../grid.js';
 import { createPlayer, createWorld } from '../types.js';
 import type { Creature, WorldState } from '../types.js';
-import { createCreature, creatureAct, creatureSense, killCreature } from './creatures.js';
+import {
+  createCreature,
+  creatureAct,
+  creatureSense,
+  fireBeaconRangeM,
+  killCreature,
+} from './creatures.js';
 import { refreshFire } from './fire.js';
 import { emitSounds } from './sound.js';
 
@@ -230,10 +237,14 @@ describe('the priority switch (Q60)', () => {
     expect(['patrol', 'return', 'investigate']).toContain(c.state);
   });
 
-  it('patrols when it knows nothing', () => {
+  it('patrols when it knows nothing and there is no fire to draw it', () => {
     const { world, player, c } = scene({ creatureAt: { x: 150 + CREATURE_DARK_SIGHT_M + 20, y: 30 } });
     player.lantern.stage = 'hooded';
     player.lantern.target = 'hooded';
+    // A dead fire throws no beacon, so nothing outranks the standing order.
+    world.fire.fuel = 0;
+    world.fire.dead = true;
+    refreshFire(world.fire);
     run(world, 1);
     expect(c.state).toBe('patrol');
   });
@@ -598,5 +609,86 @@ describe('creatures hunt the light, not the player (L12)', () => {
     const s = lightAt('full', 154);
     run(s.world, 4);
     expect(s.player.alive).toBe(false);
+  });
+});
+
+
+/**
+ * The bonfire is a beacon (Q13's horizon bloom, read from the other side).
+ *
+ * This is the trade the game turns on: a big fire holds the perimeter and makes
+ * you impossible to pinpoint inside its glow, and it is also the thing that
+ * tells every creature in the wood where you live.
+ */
+describe('the fire draws them in', () => {
+  /** A creature far down the tube with nothing else to react to. */
+  function distant(fuel: number) {
+    const world = createWorld(1200, 250);
+    world.fire.pos = { x: 40, y: 125 };
+    world.fire.fuel = fuel;
+    world.fire.dead = fuel <= 0;
+    refreshFire(world.fire);
+
+    const c = createCreature('c1', { x: 900, y: 125 }, 'deepWood');
+    world.creatures['c1'] = c;
+    return { world, c };
+  }
+
+  it('is seen from far beyond anything they could see a player at', () => {
+    const { world } = distant(FIRE_CAPACITY);
+    expect(fireBeaconRangeM(world)).toBeGreaterThan(CREATURE_DARK_SIGHT_M * 10);
+  });
+
+  it('reaches further the bigger it is', () => {
+    const roaring = fireBeaconRangeM(distant(FIRE_CAPACITY).world);
+    const guttering = fireBeaconRangeM(distant(FIRE_CAPACITY * 0.05).world);
+
+    expect(roaring).toBeGreaterThan(guttering);
+    expect(guttering).toBeGreaterThan(0);
+  });
+
+  it('reaches nothing at all once the fire is out', () => {
+    expect(fireBeaconRangeM(distant(0).world)).toBe(0);
+  });
+
+  it('pulls a creature the length of the tube toward camp', () => {
+    const { world, c } = distant(FIRE_CAPACITY);
+    const before = c.pos.x;
+
+    run(world, 10);
+
+    expect(c.state).toBe('return');
+    expect(c.pos.x).toBeLessThan(before - 50);
+  });
+
+  it('lets the far ones lose interest when it burns down', () => {
+    const { world, c } = distant(FIRE_CAPACITY);
+    run(world, 1);
+    expect(c.state).toBe('return');
+
+    // Fire collapses to embers: the glow no longer reaches this far out.
+    world.fire.fuel = 0;
+    world.fire.dead = true;
+    refreshFire(world.fire);
+    run(world, 1);
+
+    expect(fireBeaconRangeM(world)).toBe(0);
+  });
+
+  it('prowls the perimeter once it arrives rather than standing still', () => {
+    const world = createWorld(1200, 250);
+    world.fire.pos = { x: 40, y: 125 };
+    world.fire.fuel = FIRE_CAPACITY;
+    refreshFire(world.fire);
+
+    const c = createCreature('c1', { x: 60, y: 125 }, 'camp');
+    world.creatures['c1'] = c;
+
+    run(world, 8);
+
+    // Q7: never inside the safe radius while the fire holds.
+    const d = Math.hypot(c.pos.x - world.fire.pos.x, c.pos.y - world.fire.pos.y);
+    expect(d).toBeGreaterThanOrEqual(world.fire.safeRadiusM - 1e-6);
+    expect(d).toBeLessThan(CREATURE_SIEGE_RANGE_M * 2);
   });
 });

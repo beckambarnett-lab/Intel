@@ -19,6 +19,7 @@ import {
   CREATURE_SABOTAGE_TAKE,
   CREATURE_SABOTAGE_THROW_M,
   CREATURE_DARK_SIGHT_M,
+  CREATURE_FIRE_BEACON_MULT,
   CREATURE_SIEGE_RANGE_M,
   CREATURE_SNIFF_MAX_SEC,
   CREATURE_SNIFF_MIN_SEC,
@@ -288,14 +289,23 @@ function decideState(world: WorldState, c: Creature, perimeterHolds: boolean): C
 
   if (c.investigateSec > 0) return 'investigate';
 
-  // Nothing to chase: fall through to the standing order. Camp is worth
-  // pressing only when the fire has stopped holding the perimeter (Q7);
-  // otherwise it takes the woodpile instead, which is the real attack (Q24).
+  // Nothing to chase. The bonfire outranks the standing order: it is a beacon
+  // and they come to it. Camp is worth pressing only when the fire has stopped
+  // holding the perimeter (Q7); otherwise they take the woodpile instead,
+  // which is the real attack (Q24).
   const dCamp = Math.hypot(world.fire.pos.x - c.pos.x, world.fire.pos.y - c.pos.y);
   if (dCamp < CREATURE_SIEGE_RANGE_M) {
     if (!perimeterHolds) return 'siege';
     if (pileHasWood(world)) return 'sabotage';
+    // Arrived and stalled out at the perimeter: prowl the edge of the firelight
+    // rather than standing still. Handled by act(), which wanders around camp
+    // rather than around the assigned zone once this close.
+    return 'patrol';
   }
+
+  // Can it see the glow from here? No line of sight required — Q13's horizon
+  // bloom carries over the treeline, not through it.
+  if (dCamp <= fireBeaconRangeM(world)) return 'return';
 
   if (!inAssignedZone(c, CREATURE_ZONE_SLACK_M)) return 'return';
 
@@ -370,7 +380,14 @@ function act(world: WorldState, c: Creature, dt: number, perimeterHolds: boolean
     }
 
     case 'return': {
-      c.target = zoneCentre(world, c.order.zone);
+      // Toward the fire if it can see the glow, otherwise back to the ground it
+      // was told to walk. The beacon is what turns four scattered patrols into
+      // a siege the moment you build the fire up.
+      const dCamp = Math.hypot(world.fire.pos.x - c.pos.x, world.fire.pos.y - c.pos.y);
+      c.target =
+        dCamp <= fireBeaconRangeM(world)
+          ? { ...world.fire.pos }
+          : zoneCentre(world, c.order.zone);
       break;
     }
 
@@ -563,15 +580,43 @@ function inAssignedZone(c: Creature, slackM: number): boolean {
 }
 
 /**
- * A point to drift toward inside the assigned zone.
+ * How far the bonfire's glow reaches, in metres. Zero once it is out.
  *
- * Rejection-sampled against the true grid so a patrol never picks a
- * destination inside rock and grinds against it for seven seconds.
+ * Scales with the fire's own light radius, so the thing that keeps you safe is
+ * the same thing that tells them where you are.
+ */
+export function fireBeaconRangeM(world: WorldState): number {
+  const f = world.fire;
+  if (f.dead || f.lightRadiusM <= 0) return 0;
+  return f.lightRadiusM * CREATURE_FIRE_BEACON_MULT;
+}
+
+/**
+ * A point to drift toward.
+ *
+ * Around camp once it has arrived there, otherwise inside its assigned zone.
+ * Rejection-sampled against the true grid so a patrol never picks a destination
+ * inside rock and grinds against it for seven seconds.
  */
 function wanderPoint(world: WorldState, c: Creature): Vec2 {
-  const z = zoneFor(c.order.zone);
   const r = rng(world, c);
+  const dCamp = Math.hypot(world.fire.pos.x - c.pos.x, world.fire.pos.y - c.pos.y);
 
+  // Prowling the camp perimeter rather than wandering off to its zone. Q7 stops
+  // it crossing the safe radius; this is what keeps it circling just outside.
+  if (dCamp < CREATURE_SIEGE_RANGE_M) {
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const angle = r() * Math.PI * 2;
+      const range = world.fire.safeRadiusM + r() * CREATURE_SIEGE_RANGE_M;
+      const x = world.fire.pos.x + Math.cos(angle) * range;
+      const y = world.fire.pos.y + Math.sin(angle) * range;
+      if (x < 1 || y < 1 || x > world.bounds.w - 1 || y > world.bounds.h - 1) continue;
+      if (!isBlockedAt(world.grid, x, y)) return { x, y };
+    }
+    return { x: c.pos.x, y: c.pos.y };
+  }
+
+  const z = zoneFor(c.order.zone);
   for (let attempt = 0; attempt < 12; attempt++) {
     const x = z.from + r() * (z.to - z.from);
     const y = r() * world.bounds.h;

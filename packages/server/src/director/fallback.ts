@@ -32,32 +32,31 @@ export class ScriptedDirector {
   /**
    * Populate the world with its hunters (Q56). Idempotent.
    *
-   * They start IN their assigned zone, not at the lair. Spawning the whole
-   * roster at the far end meant every creature opened the run with a walk of up
-   * to 900m before it reached the ground it was supposed to be patrolling, so
-   * for the first several minutes the map was simply empty.
+   * They start at the lair, their end of the tube (L19), and walk the length of
+   * it toward your fire — which they can see from anywhere while it is burning
+   * well (CREATURE_FIRE_BEACON_MULT). Nothing here has to tell them to: the
+   * beacon does it, and the same rule brings them back every time you build the
+   * fire up again.
    *
-   * Q57 governs *respawn* — a killed creature does come back from the lair, and
-   * that is untouched. This is only where they begin.
+   * That walk is the opening. Roughly two minutes at patrol speed from the lair
+   * to camp, which is the breathing room a run needs before the first one
+   * arrives — and it is earned by distance rather than by a scripted grace
+   * period, so it shortens naturally as the run goes on and they respawn closer
+   * to whatever they were doing.
    */
   spawn(world: WorldState): void {
     if (Object.keys(world.creatures).length > 0) return;
 
+    const lair = TUBE_ZONES.find((z) => z.name === 'lair');
+    const from = lair?.from ?? 0;
+    const to = lair?.to ?? 0;
+
     for (let i = 0; i < CREATURE_COUNT; i++) {
       const id = `c${i + 1}`;
-      const zoneName = this.zoneFor(i);
-      const zone = TUBE_ZONES.find((z) => z.name === zoneName);
-      const from = zone?.from ?? 0;
-      const to = zone?.to ?? 0;
-
-      // Toward the FAR edge of the zone, offset per creature so two sharing a
-      // zone are not stacked. Far rather than centred because the camp zone
-      // reaches to x=0 and the bonfire sits at x=40 — a centred spawn there
-      // would put a hunter ten metres from the fire on the first tick, which is
-      // not an opening, it is an ambush.
-      const t = 0.7 + 0.25 * (i / Math.max(1, CREATURE_COUNT));
-      const x = from + t * (to - from);
-      world.creatures[id] = createCreature(id, { x, y: this.clearY(world, x) }, zoneName);
+      // Spread along the lair rather than stacked on one point, so the opening
+      // is not four creatures walking in single file.
+      const x = from + ((i + 1) / (CREATURE_COUNT + 1)) * (to - from);
+      world.creatures[id] = createCreature(id, { x, y: this.clearY(world, x) }, this.zoneFor(i));
     }
   }
 

@@ -579,6 +579,29 @@ export const CREATURE_ZONE_SLACK_M = 60;
 /** How close to camp it has to be to consider sieging it (Q60: Siege). */
 export const CREATURE_SIEGE_RANGE_M = 40;
 
+/**
+ * How far the bonfire's glow carries to a creature, as a multiple of its light
+ * radius. This is the single most important number in the creature model.
+ *
+ * The fire is a beacon. Q13 already makes its glow visible down the whole tube
+ * as a horizon bloom — over the treeline, not through it — so this needs no
+ * line of sight, and creatures are drawn to it from wherever they are.
+ *
+ * At 90 a roaring fire (14m) reaches 1260m, which is the entire map: keep it
+ * blazing and every creature in the wood is walking at you. Let it fall to
+ * guttering (3m) and the range collapses to 270m, and the far ones lose
+ * interest and go back to their zones.
+ *
+ * That is the trade the whole game turns on, and it cuts both ways at once. A
+ * big fire holds the perimeter (Q7) and makes you impossible to pinpoint inside
+ * its glow — and it is also what tells them where you live. A small fire is
+ * ignored, and cannot protect you from what does come.
+ *
+ * It also paces the opening: from the lair that is about two minutes of walking
+ * before the first one arrives, which is the breathing room a run needs.
+ */
+export const CREATURE_FIRE_BEACON_MULT = 90;
+
 /** Seconds a patrol holds one wander point before picking another. */
 export const CREATURE_PATROL_REPICK_SEC = 7;
 
@@ -599,17 +622,12 @@ export const DIRECTOR_REASSIGN_SEC = 12;
  * Zones the scripted director will send creatures to, in the order it fills
  * them.
  *
- * `camp` is first and it is not optional. Without it the nearest patrol was
- * nearWood, which starts at x=150 while the bonfire sits at x=40 — 110m away,
- * against 60m of sight. A player who stayed near their own fire would never
- * meet a creature at all, at any speed, and both the Siege state (Q60) and the
- * woodpile sabotage (Q24) were unreachable code.
- *
- * They still cannot cross the safe radius while the fire holds (Q7), so a
- * camp-assigned creature circles the firelight rather than walking in. That is
- * the siege, and it is meant to be something you watch happen.
+ * These are only where a creature goes when it has nothing better to do — when
+ * the bonfire is out or too small to have drawn it. A live fire outranks them
+ * entirely (CREATURE_FIRE_BEACON_MULT), so for most of a run this list decides
+ * where the stragglers wander rather than where the pressure is.
  */
-export const DIRECTOR_PATROL_ZONES = ['camp', 'nearWood', 'ruins', 'nearWood'] as const;
+export const DIRECTOR_PATROL_ZONES = ['nearWood', 'ruins', 'nearWood', 'deepWood'] as const;
 
 // ---------------------------------------------------------------------------
 // World (§14)
