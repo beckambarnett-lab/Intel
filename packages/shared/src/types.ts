@@ -503,6 +503,14 @@ export interface Creature {
   /** Last place it saw a light, and how long that memory has left (L12). */
   lastLight: Vec2 | null;
   lightMemorySec: number;
+  /**
+   * Whether that was a real sighting or only a hint worth investigating.
+   *
+   * False out in the curiosity band (CREATURE_CURIOSITY_M), where it knows
+   * something is over there but not what or exactly where — so it drifts rather
+   * than charges. True inside its actual sight range.
+   */
+  certain: boolean;
 
   /** Last place it heard something, and how long it will keep searching. */
   lastSound: Vec2 | null;

@@ -18,6 +18,8 @@ import {
   CREATURE_SABOTAGE_SEC,
   CREATURE_SABOTAGE_TAKE,
   CREATURE_SABOTAGE_THROW_M,
+  CREATURE_CURIOSITY_ERROR_M,
+  CREATURE_CURIOSITY_M,
   CREATURE_DARK_SIGHT_M,
   CREATURE_FIRE_BEACON_MULT,
   CREATURE_SIEGE_RANGE_M,
@@ -94,6 +96,7 @@ export function creatureSense(world: WorldState, dt: number): void {
     const lit = brightestVisibleLight(world, c, fireFrac);
     if (lit) {
       c.lastLight = perceive(world, c, lit);
+      c.certain = lit.certain;
       c.lightMemorySec = CREATURE_LIGHT_MEMORY_SEC;
       // A creature locked onto a light is not listening (L12). Dropping the
       // sound memory here rather than merely ignoring it means that when the
@@ -119,6 +122,8 @@ interface SeenLight {
   /** The glow's own radius. Wider means a vaguer idea of where you are. */
   radiusM: number;
   dist: number;
+  /** Inside its sight range — a sighting. Outside, only a hint worth a look. */
+  certain: boolean;
 }
 
 /**
@@ -152,10 +157,10 @@ function brightestVisibleLight(world: WorldState, c: Creature, fireFrac: number)
 
     const d = Math.hypot(p.pos.x - c.pos.x, p.pos.y - c.pos.y);
     // Flat range. Going dark does not shorten it — it only sharpens them up.
-    if (d > CREATURE_DARK_SIGHT_M || d >= bestDist) continue;
+    if (d > CREATURE_CURIOSITY_M || d >= bestDist) continue;
     if (!raycastLOS(world.grid, c.pos, p.pos)) continue;
 
-    best = { pos: p.pos, radiusM: radius, dist: d };
+    best = { pos: p.pos, radiusM: radius, dist: d, certain: d <= CREATURE_DARK_SIGHT_M };
     bestDist = d;
   }
 
@@ -172,10 +177,15 @@ function brightestVisibleLight(world: WorldState, c: Creature, fireFrac: number)
     // point of putting one down (Q41).
     if (lanternRadius(dl.lantern) <= 0) continue;
     const d = Math.hypot(dl.pos.x - c.pos.x, dl.pos.y - c.pos.y);
-    if (d > CREATURE_DARK_SIGHT_M || d >= bestDist) continue;
+    if (d > CREATURE_CURIOSITY_M || d >= bestDist) continue;
     if (!raycastLOS(world.grid, c.pos, dl.pos)) continue;
 
-    best = { pos: dl.pos, radiusM: lanternRadius(dl.lantern), dist: d };
+    best = {
+      pos: dl.pos,
+      radiusM: lanternRadius(dl.lantern),
+      dist: d,
+      certain: d <= CREATURE_DARK_SIGHT_M,
+    };
     bestDist = d;
   }
 
@@ -204,7 +214,13 @@ function perceive(world: WorldState, c: Creature, light: SeenLight): Vec2 {
   // the glow — which is why a wider glow is a worse answer, not a better one.
   const beyond = Math.max(0, light.dist - light.radiusM);
   const vagueness = clamp(beyond / CREATURE_LIGHT_RESOLVE_M, 0, 1);
-  const spread = light.radiusM * CREATURE_LIGHT_ERROR_MULT * vagueness;
+  let spread = light.radiusM * CREATURE_LIGHT_ERROR_MULT * vagueness;
+
+  // Out in the curiosity band a hint is a hint whatever your lantern is doing.
+  // Without this floor, a player creeping about hooded would be pinpointed from
+  // 120m more sharply than they can manage at 30m.
+  if (!light.certain) spread = Math.max(spread, CREATURE_CURIOSITY_ERROR_M);
+
   if (spread <= 0) return { x: light.pos.x, y: light.pos.y };
 
   const r = perceptionRng(world, c);
@@ -279,8 +295,11 @@ function decideState(world: WorldState, c: Creature, perimeterHolds: boolean): C
   // everything: a desperate creature is not taking orders.
   if (c.hits >= CREATURE_DESPERATE_HITS) return 'desperate';
 
-  // Seeing a light beats everything else it could be doing (L12).
-  if (c.lightMemorySec >= CREATURE_LIGHT_MEMORY_SEC - 1e-6 && c.lastLight) return 'pursue';
+  // Seeing you beats everything else it could be doing. A *hint* of you does
+  // not — that is a curiosity, and it drifts over at walking pace to look
+  // rather than committing to a chase.
+  const fresh = c.lightMemorySec >= CREATURE_LIGHT_MEMORY_SEC - 1e-6 && c.lastLight;
+  if (fresh) return c.certain ? 'pursue' : 'investigate';
 
   // The light went out but it has not forgotten yet.
   if (c.lightMemorySec > 0 && c.lastLight) return 'investigate';
@@ -668,6 +687,7 @@ export function createCreature(id: string, pos: Vec2, zone: ZoneName): Creature 
     target: null,
     lastLight: null,
     lightMemorySec: 0,
+    certain: false,
     lastSound: null,
     soundMemorySec: 0,
     investigateSec: 0,
@@ -697,6 +717,7 @@ function revive(world: WorldState, c: Creature): void {
   c.target = null;
   c.lastLight = null;
   c.lastSound = null;
+  c.certain = false;
   c.lightMemorySec = 0;
   c.soundMemorySec = 0;
   c.pos = { x: (lair.from + lair.to) / 2, y: world.bounds.h / 2 };

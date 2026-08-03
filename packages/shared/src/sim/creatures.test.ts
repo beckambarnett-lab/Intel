@@ -8,6 +8,8 @@ import {
   CREATURE_SABOTAGE_SEC,
   CREATURE_SOUND_MEMORY_SEC,
   FIRE_CAPACITY,
+  CREATURE_CURIOSITY_ERROR_M,
+  CREATURE_CURIOSITY_M,
   CREATURE_DARK_SIGHT_M,
   CREATURE_SIEGE_RANGE_M,
   OCCLUDER_OPAQUE,
@@ -78,7 +80,7 @@ describe('sight is flat and darkness does not hide you', () => {
   it('loses you past its sight range whatever your lantern is doing', () => {
     for (const stage of ['hooded', 'full'] as const) {
       const { world, player, c } = scene({
-        creatureAt: { x: 150 + CREATURE_DARK_SIGHT_M + 10, y: 30 },
+        creatureAt: { x: 150 + CREATURE_CURIOSITY_M + 10, y: 30 },
       });
       player.lantern.stage = stage;
       player.lantern.target = stage;
@@ -238,7 +240,7 @@ describe('the priority switch (Q60)', () => {
   });
 
   it('patrols when it knows nothing and there is no fire to draw it', () => {
-    const { world, player, c } = scene({ creatureAt: { x: 150 + CREATURE_DARK_SIGHT_M + 20, y: 30 } });
+    const { world, player, c } = scene({ creatureAt: { x: 150 + CREATURE_CURIOSITY_M + 20, y: 30 } });
     player.lantern.stage = 'hooded';
     player.lantern.target = 'hooded';
     // A dead fire throws no beacon, so nothing outranks the standing order.
@@ -262,11 +264,14 @@ describe('the priority switch (Q60)', () => {
 
 describe('speeds (Q61)', () => {
   it('pursues faster than it patrols', () => {
-    // Well outside its sight, so it is genuinely patrolling rather than
-    // quietly pursuing a player it can see perfectly well in the dark.
-    const patrolling = scene({ creatureAt: { x: 150 + CREATURE_DARK_SIGHT_M + 20, y: 30 } });
+    // Well outside even its curiosity, so it is genuinely patrolling rather
+    // than quietly drifting at a player it noticed.
+    const patrolling = scene({ creatureAt: { x: 150 + CREATURE_CURIOSITY_M + 20, y: 30 } });
     patrolling.player.lantern.stage = 'hooded';
     patrolling.player.lantern.target = 'hooded';
+    patrolling.world.fire.fuel = 0;
+    patrolling.world.fire.dead = true;
+    refreshFire(patrolling.world.fire);
     run(patrolling.world, 2);
     const patrolSpeed = Math.hypot(patrolling.c.vel.x, patrolling.c.vel.y);
 
@@ -690,5 +695,94 @@ describe('the fire draws them in', () => {
     const d = Math.hypot(c.pos.x - world.fire.pos.x, c.pos.y - world.fire.pos.y);
     expect(d).toBeGreaterThanOrEqual(world.fire.safeRadiusM - 1e-6);
     expect(d).toBeLessThan(CREATURE_SIEGE_RANGE_M * 2);
+  });
+});
+
+/**
+ * The middle ground between "no idea you exist" and "sprinting at your face".
+ *
+ * Without it the sense model was a switch, and a switch is not a hunt. Out in
+ * the curiosity band a creature knows something is over there and drifts to
+ * look; only inside its sight range does that become a chase.
+ */
+describe('curiosity (the band between noticing and knowing)', () => {
+  function atRange(metres: number, stage: 'hooded' | 'full' = 'full') {
+    const s = scene({ creatureAt: { x: 150 + metres, y: 30 } });
+    s.player.lantern.stage = stage;
+    s.player.lantern.target = stage;
+    return s;
+  }
+
+  it('notices you well beyond the range it can see you at', () => {
+    const s = atRange((CREATURE_DARK_SIGHT_M + CREATURE_CURIOSITY_M) / 2);
+    creatureSense(s.world, TICK_DT);
+    expect(s.c.lastLight).not.toBeNull();
+    expect(s.c.certain).toBe(false);
+  });
+
+  it('investigates rather than charging while it is only curious', () => {
+    const s = atRange((CREATURE_DARK_SIGHT_M + CREATURE_CURIOSITY_M) / 2);
+    run(s.world, TICK_DT);
+    expect(s.c.state).toBe('investigate');
+  });
+
+  it('commits to a chase once you are inside its sight', () => {
+    const s = atRange(CREATURE_DARK_SIGHT_M / 2);
+    run(s.world, TICK_DT);
+    expect(s.c.certain).toBe(true);
+    expect(s.c.state).toBe('pursue');
+  });
+
+  it('knows nothing at all past the curiosity band', () => {
+    const s = atRange(CREATURE_CURIOSITY_M + 20);
+    creatureSense(s.world, TICK_DT);
+    expect(s.c.lastLight).toBeNull();
+  });
+
+  it('drifts at walking pace, not pursuit pace', () => {
+    const curious = atRange((CREATURE_DARK_SIGHT_M + CREATURE_CURIOSITY_M) / 2);
+    run(curious.world, 1);
+    const drift = Math.hypot(curious.c.vel.x, curious.c.vel.y);
+
+    const chasing = atRange(CREATURE_DARK_SIGHT_M / 2);
+    run(chasing.world, 0.5);
+    const charge = Math.hypot(chasing.c.vel.x, chasing.c.vel.y);
+
+    expect(drift).toBeLessThan(charge);
+  });
+
+  it('is vague about where you are even if you are hooded', () => {
+    // A hint is a hint. Creeping about dark must not be MORE findable at 90m
+    // than it is at 30m, which is what happens without the error floor.
+    let total = 0;
+    let n = 0;
+    for (let t = 0; t < 300; t++) {
+      const s = atRange(90, 'hooded');
+      s.world.tick = t * 20;
+      creatureSense(s.world, TICK_DT);
+      if (s.c.lastLight) {
+        total += Math.hypot(s.c.lastLight.x - s.player.pos.x, s.c.lastLight.y - s.player.pos.y);
+        n++;
+      }
+    }
+    expect(n).toBeGreaterThan(0);
+    expect(total / n).toBeGreaterThan(CREATURE_CURIOSITY_ERROR_M / 3);
+  });
+
+  it('closes the distance while curious, and escalates when it arrives', () => {
+    const s = atRange(100);
+    expect(s.c.state).toBe('patrol');
+
+    run(s.world, 1);
+    expect(s.c.state).toBe('investigate');
+    expect(s.c.certain).toBe(false);
+
+    // Long enough to drift the ~40m into its real sight range, and no longer —
+    // give it another few seconds and it has closed the rest and killed you,
+    // which is a different assertion.
+    run(s.world, 5);
+    expect(s.c.certain).toBe(true);
+    expect(s.c.state).toBe('pursue');
+    expect(s.player.alive).toBe(true);
   });
 });

@@ -512,6 +512,30 @@ export const CREATURE_INVESTIGATE_SEC = 5;
  */
 export const CREATURE_DARK_SIGHT_M = 60;
 
+/**
+ * How far out something registers as *worth a look*, in metres.
+ *
+ * Between CREATURE_DARK_SIGHT_M and this, a creature has not seen you — it has
+ * caught a hint of something and drifts over at walking pace to find out. Only
+ * inside 60m does that become a sighting and a chase.
+ *
+ * Without this band the sense model was a switch: at 61m they had no idea you
+ * existed and at 59m they were sprinting at your face. A hunter should notice
+ * you before it commits, and you should get the chance to see it coming and
+ * decide what to do about it. The growl on the state change (Q69) is the tell.
+ */
+export const CREATURE_CURIOSITY_M = 120;
+
+/**
+ * Floor on how far off a curious creature's guess is, in metres.
+ *
+ * A hint is a hint whatever your lantern is doing, so this overrides the usual
+ * glow-radius error out in the curiosity band — otherwise a player creeping
+ * about hooded would be pinpointed from 120m, which is sharper than they can
+ * manage at 30m. It drifts at your general area, not at you.
+ */
+export const CREATURE_CURIOSITY_ERROR_M = 25;
+
 /** Sabotage (Q24): seconds to scatter the pile, and how far the logs fly. */
 export const CREATURE_SABOTAGE_SEC = 3;
 export const CREATURE_SABOTAGE_THROW_M = 6;
