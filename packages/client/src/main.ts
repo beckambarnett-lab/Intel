@@ -1,10 +1,10 @@
 import {
   CARRY_CAPACITY_KG,
   CHOP_SWINGS,
-  FIRE_CAPACITY,
   FIRE_STOKE_SEC,
   TICK_MS,
   lanternRadius,
+  overstokeMultiplier,
 } from '@ember/shared';
 import type { LanternState } from '@ember/shared';
 import { InputSource } from './input.js';
@@ -111,9 +111,14 @@ function formatHud(net: NetClient): string {
   if (fire) {
     // fuel is only sent while you are in the firelight (Q127) — when it is
     // absent, the tier is all you get, which is the intended experience.
+    //
+    // Shown as a bare number rather than a fraction: there is no capacity to be
+    // a fraction of any more (DECISIONS §6). What replaces it is the burn rate,
+    // which is the thing an over-stoked fire actually costs you — at 7500 fuel
+    // that reads 25.0/s, one whole log a second.
     const fuel =
       fire.fuel !== undefined
-        ? `${fire.fuel.toFixed(0)}/${FIRE_CAPACITY}`
+        ? `${fire.fuel.toFixed(0)} (${overstokeMultiplier(fire.fuel).toFixed(1)}/s)`
         : '— (too far to read)';
     lines.push(`fire ${fire.tier}  fuel ${fuel}  light ${fire.lightRadiusM.toFixed(1)}m`);
 

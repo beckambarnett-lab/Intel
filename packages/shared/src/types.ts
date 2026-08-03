@@ -1,5 +1,5 @@
 import {
-  FIRE_CAPACITY,
+  FIRE_NOMINAL_FUEL,
   FIRE_EMBER_GRACE_SEC,
   LANTERN_START_STAGE,
   LANTERN_TANK,
@@ -295,7 +295,11 @@ export type FireTier = 'roaring' | 'burning' | 'low' | 'guttering' | 'embers';
  */
 export interface Fire {
   pos: Vec2;
-  /** 0..FIRE_CAPACITY (Q1). */
+  /**
+   * Fuel units. Zero or more, with no upper bound (DECISIONS §6) — a fire
+   * carrying more than FIRE_NOMINAL_FUEL is bigger and eats proportionally
+   * faster, and there is no level at which it refuses another log.
+   */
   fuel: number;
   /** Derived from fuel each tick (Q5). */
   tier: FireTier;
@@ -419,7 +423,7 @@ export function createWorld(
 export function createFire(): Fire {
   return {
     pos: { ...SANDBOX_FIRE_POS },
-    fuel: FIRE_CAPACITY,
+    fuel: FIRE_NOMINAL_FUEL,
     tier: 'roaring',
     lightRadiusM: 0,
     safeRadiusM: 0,

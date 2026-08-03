@@ -6,7 +6,6 @@ import {
   CHOP_SWINGS,
   DEPOSIT_RANGE_M,
   DEPOSIT_SEC_PER_ITEM,
-  FIRE_CAPACITY,
   FIRE_EMBER_GRACE_SEC,
   FIRE_STOKE_RANGE_M,
   FIRE_STOKE_SEC,
@@ -94,16 +93,20 @@ export function itemInRange(world: WorldState, pos: Vec2): WorldItem | null {
 }
 
 /**
- * The heaviest fuel in a load that still fits in the fire.
+ * The heaviest fuel in a load, or null if there is nothing to burn.
  *
- * Logs before branches, so the good wood goes on while there is room for it
- * and the branches are what you are left topping up with — which is the
- * shape the fuel values (Q10) imply.
+ * Logs before branches, so the good wood goes on first and the branches are
+ * what you are left topping up with — which is the shape the fuel values (Q10)
+ * imply.
+ *
+ * It used to also ask whether the fuel *fit*, and fall back to a branch when a
+ * log would have overflowed the cap. With the cap gone (DECISIONS §6) everything
+ * fits, always, and no fuel is ever wasted by putting a log on a nearly full
+ * fire — the fire simply gets bigger and burns faster.
  */
-function bestFuel(available: Carrying, fuel: number): ItemKind | null {
+function bestFuel(available: Carrying): ItemKind | null {
   for (const kind of ITEM_KINDS) {
-    if (available[kind] <= 0) continue;
-    if (fuel + FUEL_VALUE[kind] <= FIRE_CAPACITY) return kind;
+    if (available[kind] > 0) return kind;
   }
   return null;
 }
@@ -267,15 +270,16 @@ function tryStoke(world: WorldState, playerId: string, dt: number): boolean {
 
   // Either from hand or from the pile (Q23) — hand first, so that what you
   // hauled back goes on before the reserve does.
-  const fromHand = bestFuel(player.carrying, f.fuel);
+  const fromHand = bestFuel(player.carrying);
   const fromPile =
     fromHand === null && distance(f.pos, world.woodpile.pos) <= FIRE_STOKE_RANGE_M + DEPOSIT_RANGE_M
-      ? bestFuel(world.woodpile.contents, f.fuel)
+      ? bestFuel(world.woodpile.contents)
       : null;
 
   const kind = fromHand ?? fromPile;
   if (kind === null) {
-    // Nothing that fits. The fire is full, or you have nothing to burn.
+    // Nothing to burn. The fire can always take more (DECISIONS §6), so this is
+    // only ever an empty pair of hands and an empty pile.
     player.stokeProgress = 0;
     return false;
   }
@@ -287,7 +291,8 @@ function tryStoke(world: WorldState, playerId: string, dt: number): boolean {
   if (fromHand !== null) player.carrying[kind] -= 1;
   else world.woodpile.contents[kind] -= 1;
 
-  f.fuel = Math.min(FIRE_CAPACITY, f.fuel + FUEL_VALUE[kind]);
+  // No ceiling (DECISIONS §6). Hold the key and it keeps going on.
+  f.fuel += FUEL_VALUE[kind];
   if (f.fuel > 0) f.emberSecLeft = FIRE_EMBER_GRACE_SEC;
   refreshFire(f);
 

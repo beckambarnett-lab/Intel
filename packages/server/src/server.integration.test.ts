@@ -1,5 +1,5 @@
 import {
-  FIRE_CAPACITY,
+  FIRE_NOMINAL_FUEL,
   PROTOCOL_VERSION,
   TICK_MS,
   decode,
@@ -249,7 +249,7 @@ describe('server end to end', () => {
     await a.ready();
     await waitFor(() => a.snapshots.length > 2);
 
-    expect(a.welcome!.fire.fuel).toBe(FIRE_CAPACITY);
+    expect(a.welcome!.fire.fuel).toBe(FIRE_NOMINAL_FUEL);
     expect(a.welcome!.fire.dead).toBe(false);
     expect(a.latest!.outcome).toBeNull();
 
@@ -264,7 +264,7 @@ describe('server end to end', () => {
 
     // Burn a little, then leave.
     await sleep(600);
-    expect(server.room.state.fire.fuel).toBeLessThan(FIRE_CAPACITY);
+    expect(server.room.state.fire.fuel).toBeLessThan(FIRE_NOMINAL_FUEL);
 
     a.close();
     await waitFor(() => server.room.playerCount === 0);
@@ -272,7 +272,7 @@ describe('server end to end', () => {
     // The next player finds a fresh camp, not the last one's leftovers.
     const b = new TestClient('bob');
     await b.ready();
-    expect(b.welcome!.fire.fuel).toBe(FIRE_CAPACITY);
+    expect(b.welcome!.fire.fuel).toBe(FIRE_NOMINAL_FUEL);
 
     b.close();
     await waitFor(() => server.room.playerCount === 0);

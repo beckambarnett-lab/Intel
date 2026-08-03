@@ -88,7 +88,19 @@ export const MASS_KG = {
 // Fire (§2)
 // ---------------------------------------------------------------------------
 
-export const FIRE_CAPACITY = 300; // Q1
+/**
+ * The reference fire, in fuel units. NOT a cap (DECISIONS §6).
+ *
+ * Q1/Q9 made 300 a hard ceiling and every other fire number a fraction of it.
+ * The ceiling is gone: there is no limit to how many logs go on, the fire scales
+ * indefinitely, and the price is that it eats wood proportionally faster
+ * (FIRE_BASE_BURN_PER_SEC). What survives is this number's other job — it is the
+ * fire the whole design is calibrated against, the one that burns for exactly
+ * five minutes at the base rate and throws exactly the roaring radius. Every
+ * absolute below is that calibration written out, and above it the fire is
+ * measured in multiples of this.
+ */
+export const FIRE_NOMINAL_FUEL = 300; // Q1, less the cap
 export const FIRE_BASE_BURN_PER_SEC = 1.0; // Q2
 export const FIRE_BURN_PER_EXTRA_PLAYER = 0.08; // Q3
 export const FIRE_ESCALATION_PER_10_MIN = 0.1; // Q4
@@ -97,26 +109,49 @@ export const FIRE_STOKE_SEC = 1.2; // Q8
 export const FIRE_STOKE_RANGE_M = 1.5; // Q8
 export const FUEL_VALUE = { log: 25, branch: 8 } as const; // Q10
 
-/** Fire tiers by fuel fraction, with light radius in metres (Q5). */
+/**
+ * Fire tiers by absolute fuel, with light radius in metres (Q5).
+ *
+ * Q5 keyed these to fractions of capacity, which stops meaning anything once
+ * there is no capacity. They are the same thresholds, multiplied out against
+ * FIRE_NOMINAL_FUEL: 0.75 -> 225, 0.4 -> 120, 0.15 -> 45. Nothing about the
+ * current feel changes, and a fire below nominal behaves exactly as it did.
+ *
+ * There is deliberately no tier above `roaring`. An over-stoked fire is a
+ * roaring fire that happens to be enormous — the audio and VFX state machine
+ * has nothing extra to say about it, and inventing a sixth state would mean
+ * inventing a sixth set of assets for a band with no upper edge.
+ *
+ * `guttering` starts at a whisker above zero rather than at zero: reaching zero
+ * is what puts the fire into `embers` and starts the grace countdown (L15), so
+ * the two thresholds must not meet.
+ */
 export const FIRE_TIERS = [
-  { name: 'roaring', minFrac: 0.75, radiusM: 14 },
-  { name: 'burning', minFrac: 0.4, radiusM: 10 },
-  { name: 'low', minFrac: 0.15, radiusM: 6 },
-  { name: 'guttering', minFrac: 0.001, radiusM: 3 },
-  { name: 'embers', minFrac: 0, radiusM: 1.5 },
+  { name: 'roaring', minFuel: 225, radiusM: 14 },
+  { name: 'burning', minFuel: 120, radiusM: 10 },
+  { name: 'low', minFuel: 45, radiusM: 6 },
+  { name: 'guttering', minFuel: 0.3, radiusM: 3 },
+  { name: 'embers', minFuel: 0, radiusM: 1.5 },
 ] as const;
 
 /** Creatures cannot cross this fraction of the fire's light radius (Q6). */
 export const FIRE_SAFE_RADIUS_FRAC = 0.7;
 
-/** Below this fuel fraction the camp perimeter fails entirely (Q7). */
-export const FIRE_PERIMETER_MIN_FRAC = 0.15;
+/**
+ * Below this much fuel the camp perimeter fails entirely (Q7).
+ *
+ * Q7 is "never while fire >= Low", so this is the `low` tier's threshold and
+ * must stay equal to it — asserted in fire.test.ts rather than derived by index,
+ * because indexing into FIRE_TIERS to express it would break silently the first
+ * time somebody reorders the table.
+ */
+export const FIRE_PERIMETER_MIN_FUEL = 45;
 
 /** How often the burn rate steps up, in seconds (Q4). */
 export const FIRE_ESCALATION_PERIOD_SEC = 600;
 
 /**
- * Light radius as a smooth curve over fuel fraction (Q5).
+ * Light radius as a smooth curve over fuel (Q5).
  *
  * Q5 gives one radius per tier and then says the radius interpolates smoothly,
  * which cannot both be literally true — a smooth curve has to disagree with a
@@ -127,14 +162,34 @@ export const FIRE_ESCALATION_PERIOD_SEC = 600;
  * is continuous.
  *
  * Derived from FIRE_TIERS rather than restated, so retuning the tiers retunes
- * the curve and the two cannot drift apart.
+ * the curve and the two cannot drift apart. The top band runs to nominal, which
+ * is where this curve ends and the logarithmic one below takes over.
  */
 export const FIRE_RADIUS_ANCHORS = FIRE_TIERS.map((tier, i) => {
-  const upper = i === 0 ? 1 : (FIRE_TIERS[i - 1]?.minFrac ?? 1);
-  return { frac: (tier.minFrac + upper) / 2, radiusM: tier.radiusM };
+  const upper = i === 0 ? FIRE_NOMINAL_FUEL : (FIRE_TIERS[i - 1]?.minFuel ?? FIRE_NOMINAL_FUEL);
+  return { fuel: (tier.minFuel + upper) / 2, radiusM: tier.radiusM };
 })
   .slice()
   .reverse();
+
+/**
+ * Metres of light added per e-fold of fuel above nominal (DECISIONS §6).
+ *
+ * Above FIRE_NOMINAL_FUEL the radius keeps growing but logarithmically:
+ * `roaringRadius + COEFF * ln(fuel / nominal)`. Every doubling of the woodpile
+ * is worth a flat ~6.9m, so 300 logs on the fire throws 46m and 1200 logs
+ * throws 60m. Unbounded, because the design is that there is no ceiling — but
+ * self-limiting, which is the only reason no ceiling is affordable.
+ *
+ * The coefficient is set by what the renderer can take, measured rather than
+ * guessed. Per frame, per light, the client casts a visibility polygon and
+ * stamps the memory field, and both grow faster than the radius does: on the
+ * tube map at camp, 14m costs 0.7ms, 46m costs 3.9ms, 60m costs 7.5ms and 80m
+ * costs 16ms, which is the entire 60fps frame. At 10 the fire a real hoard can
+ * build sits at 46m — a quarter of the frame — and reaching even 67m would take
+ * 2400 logs. Raising this is not free and is not a cosmetic change.
+ */
+export const FIRE_RADIUS_LOG_COEFF = 10;
 
 // ---------------------------------------------------------------------------
 // Wood & chopping (§3)
@@ -657,6 +712,19 @@ export const CREATURE_ZONE_SLACK_M = 60;
 
 /** How close to camp it has to be to consider sieging it (Q60: Siege). */
 export const CREATURE_SIEGE_RANGE_M = 40;
+
+/**
+ * The band outside the perimeter that still counts as being at camp.
+ *
+ * "At camp" is normally CREATURE_SIEGE_RANGE_M, and while the fire is anywhere
+ * near nominal it still is — a roaring 14m fire keeps them out to 9.8m, well
+ * inside 40. With the fuel cap gone the perimeter can be pushed past 40m (a 57m
+ * light radius, about 890 logs on the fire), and then the gate sits INSIDE the
+ * ring the creature is excluded from: it can never get close enough to decide to
+ * prowl or to take the woodpile, so it walks at camp forever and is shoved back
+ * every tick. The gate has to stay outside the perimeter it is describing.
+ */
+export const CREATURE_SIEGE_BAND_M = 12;
 
 /**
  * How far the bonfire's glow carries to a creature, as a multiple of its light

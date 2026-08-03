@@ -7,7 +7,7 @@ import {
   CREATURE_RESPAWN_SEC,
   CREATURE_SABOTAGE_SEC,
   CREATURE_SOUND_MEMORY_SEC,
-  FIRE_CAPACITY,
+  FIRE_NOMINAL_FUEL,
   CREATURE_CURIOSITY_M,
   CREATURE_LAUNCH_MIN_RANGE_M,
   CREATURE_LAUNCH_SPEED_MULT,
@@ -29,6 +29,7 @@ import { setTile } from '../grid.js';
 import { createLantern, createPlayer, createWorld } from '../types.js';
 import type { Creature, WorldState } from '../types.js';
 import {
+  campPresenceRangeM,
   createCreature,
   creatureAct,
   creatureSense,
@@ -118,7 +119,7 @@ describe('sight is flat and darkness does not hide you', () => {
     });
     player.lantern.stage = 'hooded';
     player.lantern.target = 'hooded';
-    world.fire.fuel = FIRE_CAPACITY;
+    world.fire.fuel = FIRE_NOMINAL_FUEL;
     refreshFire(world.fire);
 
     creatureSense(world, TICK_DT);
@@ -312,7 +313,7 @@ describe('the camp perimeter (Q7)', () => {
     });
     player.lantern.stage = 'full';
     player.lantern.target = 'full';
-    world.fire.fuel = FIRE_CAPACITY;
+    world.fire.fuel = FIRE_NOMINAL_FUEL;
     refreshFire(world.fire);
 
     run(world, 20);
@@ -336,6 +337,51 @@ describe('the camp perimeter (Q7)', () => {
     const after = Math.hypot(c.pos.x - world.fire.pos.x, c.pos.y - world.fire.pos.y);
 
     expect(after).toBeLessThan(before);
+  });
+
+  /**
+   * A perimeter wider than the flat siege gate (DECISIONS §6).
+   *
+   * With the fuel cap gone the safe radius can be pushed past
+   * CREATURE_SIEGE_RANGE_M — 25000 fuel, about 1000 logs, puts it at ~41m. The
+   * flat gate would then sit inside the ring the creature is excluded from, so
+   * it could never be close enough to decide to prowl or to go for the woodpile:
+   * it would walk at camp forever and be shoved back out every tick, on a state
+   * that never leaves `return`. campPresenceRangeM is what keeps the gate
+   * outside the perimeter it describes.
+   */
+  it('still recognises camp when the perimeter is wider than the siege gate', () => {
+    const { world, c } = scene({
+      // Nobody to chase — this is about the standing order, not a hunt.
+      playerAt: { x: 280, y: 30 },
+      creatureAt: { x: 60, y: 5 },
+    });
+    world.woodpile.pos = { x: 8, y: 5 };
+    world.woodpile.contents.log = 5;
+    world.fire.fuel = 25000;
+    refreshFire(world.fire);
+
+    expect(world.fire.safeRadiusM).toBeGreaterThan(CREATURE_SIEGE_RANGE_M);
+    expect(campPresenceRangeM(world)).toBeGreaterThan(world.fire.safeRadiusM);
+
+    run(world, 30);
+
+    // It arrived, and it knows it arrived.
+    expect(c.state).not.toBe('return');
+    const d = Math.hypot(c.pos.x - world.fire.pos.x, c.pos.y - world.fire.pos.y);
+    expect(d).toBeGreaterThanOrEqual(world.fire.safeRadiusM - 1e-6);
+    expect(d).toBeLessThan(campPresenceRangeM(world));
+  });
+
+  /** …and none of that changes anything at a fire of ordinary size. */
+  it('leaves the gate at the flat siege range for any normal fire', () => {
+    const { world } = scene();
+
+    for (const fuel of [0, 45, 120, FIRE_NOMINAL_FUEL, 2000]) {
+      world.fire.fuel = fuel;
+      refreshFire(world.fire);
+      expect(campPresenceRangeM(world)).toBe(CREATURE_SIEGE_RANGE_M);
+    }
   });
 });
 
@@ -372,7 +418,7 @@ describe('sabotage (Q24)', () => {
   it('scatters the woodpile into the dark rather than destroying the wood', () => {
     const world = createWorld(120, 60);
     world.fire.pos = { x: 20, y: 30 };
-    world.fire.fuel = FIRE_CAPACITY;
+    world.fire.fuel = FIRE_NOMINAL_FUEL;
     refreshFire(world.fire);
     world.woodpile.pos = { x: 30, y: 30 };
     world.woodpile.contents.log = 6;
@@ -392,7 +438,7 @@ describe('sabotage (Q24)', () => {
   it('throws the wood clear of the safe radius', () => {
     const world = createWorld(120, 60);
     world.fire.pos = { x: 30, y: 30 };
-    world.fire.fuel = FIRE_CAPACITY;
+    world.fire.fuel = FIRE_NOMINAL_FUEL;
     refreshFire(world.fire);
     world.woodpile.pos = { x: 30, y: 30 };
     world.woodpile.contents.log = 4;
@@ -521,7 +567,7 @@ describe('creatures aim at the light, not the player', () => {
     });
     player.lantern.stage = 'hooded';
     player.lantern.target = 'hooded';
-    world.fire.fuel = FIRE_CAPACITY;
+    world.fire.fuel = FIRE_NOMINAL_FUEL;
     refreshFire(world.fire);
 
     creatureSense(world, TICK_DT);

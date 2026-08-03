@@ -36,12 +36,12 @@ import {
   CREATURE_CURIOSITY_M,
   CREATURE_DARK_SIGHT_M,
   CREATURE_FIRE_BEACON_MULT,
+  CREATURE_SIEGE_BAND_M,
   CREATURE_SIEGE_RANGE_M,
   CREATURE_SNIFF_MAX_SEC,
   CREATURE_SNIFF_MIN_SEC,
   CREATURE_SOUND_MEMORY_SEC,
   CREATURE_ZONE_SLACK_M,
-  FIRE_PERIMETER_MIN_FRAC,
   PLAYER_WALK_SPEED,
   SOUND_RADIUS_GROWL_M,
   SOUND_RADIUS_SNIFF_M,
@@ -53,7 +53,7 @@ import { canSee, raycastLOS } from '../los.js';
 import { TICK_DT } from '../constants.js';
 import { clamp, lerp, mulberry32 } from '../math.js';
 import type { Vec2 } from '../math.js';
-import { fuelFraction } from './fire.js';
+import { perimeterHolds as firePerimeterHolds } from './fire.js';
 import { spawnItem } from './items.js';
 import { lanternRadius } from './lantern.js';
 import { emit, loudestAudibleAt } from './sound.js';
@@ -88,7 +88,6 @@ import type { Creature, CreatureState, ItemKind, WorldState } from '../types.js'
  * cover the stealth tool rather than darkness.
  */
 export function creatureSense(world: WorldState, dt: number): void {
-  const fireFrac = fuelFraction(world.fire);
 
   for (const id of Object.keys(world.creatures)) {
     const c = world.creatures[id];
@@ -107,7 +106,7 @@ export function creatureSense(world: WorldState, dt: number): void {
     c.soundMemorySec = Math.max(0, c.soundMemorySec - dt);
     if (c.soundMemorySec <= 0) c.lastSound = null;
 
-    const lit = brightestVisibleLight(world, c, fireFrac);
+    const lit = brightestVisibleLight(world, c);
     if (lit) {
       c.lastLight = perceive(lit);
       c.certain = lit.certain;
@@ -148,11 +147,11 @@ interface SeenLight {
  * that is the glow you are standing in, and it is what decides how badly the
  * creature's guess will miss.
  */
-function brightestVisibleLight(world: WorldState, c: Creature, fireFrac: number): SeenLight | null {
+function brightestVisibleLight(world: WorldState, c: Creature): SeenLight | null {
   let best: SeenLight | null = null;
 
   const fire = world.fire;
-  const firelit = !fire.dead && fireFrac > 0;
+  const firelit = !fire.dead && fire.fuel > 0;
 
   for (const id of Object.keys(world.players)) {
     const p = world.players[id];
@@ -262,8 +261,7 @@ function perceive(light: SeenLight): Vec2 {
  * behaviour-tree library would have cost.
  */
 export function creatureAct(world: WorldState, dt: number): void {
-  const fireFrac = fuelFraction(world.fire);
-  const perimeterHolds = !world.fire.dead && fireFrac >= FIRE_PERIMETER_MIN_FRAC;
+  const perimeterHolds = firePerimeterHolds(world.fire);
 
   for (const id of Object.keys(world.creatures)) {
     const c = world.creatures[id];
@@ -332,7 +330,7 @@ function decideState(world: WorldState, c: Creature, perimeterHolds: boolean): C
   // holding the perimeter (Q7); otherwise they take the woodpile instead,
   // which is the real attack (Q24).
   const dCamp = Math.hypot(world.fire.pos.x - c.pos.x, world.fire.pos.y - c.pos.y);
-  if (dCamp < CREATURE_SIEGE_RANGE_M) {
+  if (dCamp < campPresenceRangeM(world)) {
     if (!perimeterHolds) return 'siege';
     if (pileHasWood(world)) return 'sabotage';
     // Arrived and stalled out at the perimeter: prowl the edge of the firelight
@@ -756,6 +754,21 @@ export function fireBeaconRangeM(world: WorldState): number {
 }
 
 /**
+ * How close to the fire counts as being at camp, in metres.
+ *
+ * Normally CREATURE_SIEGE_RANGE_M flat, and while the fire is anywhere near
+ * nominal that is what this returns. The `max` is what keeps an uncapped fire
+ * (DECISIONS §6) from breaking the state machine: the perimeter grows with the
+ * fuel, and once it passes 40m the flat gate would sit inside the ring the
+ * creature is physically excluded from — it could never get close enough to
+ * decide to prowl or to go for the woodpile, so it would walk at camp forever
+ * and be pushed back out every tick.
+ */
+export function campPresenceRangeM(world: WorldState): number {
+  return Math.max(CREATURE_SIEGE_RANGE_M, world.fire.safeRadiusM + CREATURE_SIEGE_BAND_M);
+}
+
+/**
  * A point to drift toward.
  *
  * Around camp once it has arrived there, otherwise inside its assigned zone.
@@ -768,7 +781,7 @@ function wanderPoint(world: WorldState, c: Creature): Vec2 {
 
   // Prowling the camp perimeter rather than wandering off to its zone. Q7 stops
   // it crossing the safe radius; this is what keeps it circling just outside.
-  if (dCamp < CREATURE_SIEGE_RANGE_M) {
+  if (dCamp < campPresenceRangeM(world)) {
     for (let attempt = 0; attempt < 12; attempt++) {
       const angle = r() * Math.PI * 2;
       const range = world.fire.safeRadiusM + r() * CREATURE_SIEGE_RANGE_M;

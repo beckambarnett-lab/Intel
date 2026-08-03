@@ -3,7 +3,7 @@ import {
   CARRY_CAPACITY_KG,
   DEPOSIT_RANGE_M,
   DEPOSIT_SEC_PER_ITEM,
-  FIRE_CAPACITY,
+  FIRE_NOMINAL_FUEL,
   FIRE_STOKE_RANGE_M,
   FIRE_STOKE_SEC,
   FUEL_VALUE,
@@ -92,34 +92,60 @@ describe('stoking (Q8, Q9)', () => {
     expect(me(world).carrying.log).toBe(logsBefore);
   });
 
-  it('will not burn a log for a sliver of fuel on a nearly full fire (Q9)', () => {
+  /**
+   * This replaces "will not burn a log for a sliver of fuel on a nearly full
+   * fire (Q9)", which was the test that made Q9's hard cap the spec: at 299 of
+   * 300 it refused the log rather than waste 24 of its 25 fuel.
+   *
+   * With the cap gone (DECISIONS §6) there is no sliver and nothing to waste —
+   * the fire takes the log whole and gets bigger. The protection worth keeping
+   * from the old test is the other half of what it checked: that a stoke either
+   * consumes the wood and banks all of its fuel, or does neither.
+   */
+  it('takes the log on a fire that is already at nominal, and banks all of it', () => {
     const world = worldWith(true);
-    world.fire.fuel = FIRE_CAPACITY - 1;
+    world.fire.fuel = FIRE_NOMINAL_FUEL - 1;
     const logsBefore = me(world).carrying.log;
 
-    run(world, FIRE_STOKE_SEC * 2, hold);
+    run(world, FIRE_STOKE_SEC + TICK_DT, hold);
 
-    expect(me(world).carrying.log).toBe(logsBefore);
-    expect(world.fire.fuel).toBeLessThanOrEqual(FIRE_CAPACITY);
+    expect(me(world).carrying.log).toBe(logsBefore - 1);
+    // Burned a little over the channel, so allow for the drain rather than
+    // asserting the sum exactly.
+    expect(world.fire.fuel).toBeGreaterThan(FIRE_NOMINAL_FUEL + FUEL_VALUE.log - 5);
   });
 
   /**
-   * A branch is worth 8 and a log 25 (Q10), so there are fuel levels where the
-   * branch fits and the log does not. Falling back rather than refusing is what
-   * lets you top a fire right up.
+   * DECISIONS §6: there is no level at which the fire stops accepting wood, and
+   * holding the key keeps putting it on. Twelve logs is what used to fill an
+   * empty fire (Q10) — now it is just the first twelve.
    */
-  it('falls back to a branch when a log will not fit', () => {
-    const world = worldWith(true, 1);
+  it('keeps accepting wood indefinitely, one log per channel', () => {
+    const world = worldWith(true, 20);
+    world.fire.fuel = FIRE_NOMINAL_FUEL;
+
+    run(world, (FIRE_STOKE_SEC + TICK_DT) * 12, hold);
+
+    expect(me(world).carrying.log).toBeLessThanOrEqual(8);
+    expect(world.fire.fuel).toBeGreaterThan(FIRE_NOMINAL_FUEL * 1.8);
+  });
+
+  /**
+   * A branch is worth 8 and a log 25 (Q10). The fallback used to be about fit —
+   * there were fuel levels where the branch went on and the log would not — and
+   * now it is only about what you are carrying.
+   */
+  it('falls back to a branch when there are no logs left', () => {
+    const world = worldWith(true, 0);
     me(world).carrying.branch = 1;
-    world.fire.fuel = FIRE_CAPACITY - FUEL_VALUE.branch;
+    world.fire.fuel = 100;
 
     run(world, FIRE_STOKE_SEC + TICK_DT, hold);
 
     expect(me(world).carrying.branch).toBe(0);
-    expect(me(world).carrying.log).toBe(1);
   });
 
-  it('prefers the log when both fit', () => {
+  it('prefers the log when carrying both', () => {
     const world = worldWith(true, 1);
     me(world).carrying.branch = 1;
     world.fire.fuel = 100;

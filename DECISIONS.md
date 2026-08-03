@@ -9,7 +9,7 @@ build, and several replaced a first attempt that was wrong in an instructive
 way. The reasoning is preserved because the wrong version is usually the
 obvious one, and it will be re-derived otherwise.
 
-Steps 1–6 are complete. Next: the fire's fuel cap (below), then Step 7.
+Steps 1–6 are complete, and the fire's fuel cap is gone (§6). Next: Step 7.
 
 ---
 
@@ -123,12 +123,71 @@ phantom; on ground you have never lit it stays black.
 - **Lantern**: `LANTERN_TANK` (50) is the starting fill, not a ceiling. Hold `F`
   to refuel continuously (Q39's numbers set the rate); a tap still cycles the
   shutter, with `LANTERN_REFUEL_HOLD_SEC` between them.
-- **Bonfire — NOT YET BUILT.** Q1/Q9's hard cap of 300 is to be removed: the
-  fire scales indefinitely and burn rate scales with how much is on it. This is
-  the next task, and it is not a tweak — Q5 defines *every tier and light radius
-  as a fraction of capacity*, and Q7 keys the perimeter to a fraction, so with
-  no cap there is no denominator. Radius and tiers need re-deriving against
-  absolute fuel, and Step 3's "idle fire dies in exactly 5 minutes" gate moves.
+- **Bonfire**: Q1/Q9's hard cap of 300 is gone. The fire scales indefinitely and
+  eats wood in proportion. `FIRE_CAPACITY` is now `FIRE_NOMINAL_FUEL` — still
+  300, but a reference point rather than a ceiling, and everything Q5 and Q7
+  keyed to a *fraction* of it is now stated in absolute fuel.
+
+  Three decisions, and each was picked so that **at or below 300 the arithmetic
+  is bit-identical to the capped version**. Step 3's "an idle fire dies in
+  exactly five minutes" gate did not move and did not need editing.
+
+  **Burn** is `FIRE_BASE_BURN_PER_SEC × max(1, fuel / FIRE_NOMINAL_FUEL)`, with
+  the Q3 crowd and Q4 escalation multipliers still on top. The `max(1, …)` is
+  what protects the five minutes: a fire on its last log must not burn in slow
+  motion. Above nominal the drain is proportional to what is on it, which is
+  exponential decay with a five-minute e-fold — so 7500 fuel (300 logs) starts
+  at 25/sec, *exactly one log a second*, falls back to nominal in about sixteen
+  minutes and dies at twenty-one. The same wood drip-fed would have burned for
+  over two hours. **Over-stoking rents light; it never banks it**, and that
+  6× waste is the entire price.
+
+  **Tiers** are the old fractions multiplied out: roaring 225, burning 120, low
+  45, guttering 0.3, embers 0. Nothing about the current feel changes.
+  `FIRE_PERIMETER_MIN_FUEL` is 45, which is the `low` threshold, as Q7 says.
+  Guttering starts at 0.3 rather than at 0 because reaching zero is what triggers
+  the ember countdown (L15) — if the two thresholds met, a dead fire would report
+  itself as guttering and the scramble would never start. **There is no tier
+  above roaring**: an over-stoked fire is a roaring fire that happens to be
+  enormous, and a sixth state would mean a sixth set of audio and VFX assets for
+  a band with no upper edge.
+
+  **Radius** is unchanged below nominal and logarithmic above it:
+  `14 + FIRE_RADIUS_LOG_COEFF × ln(fuel / nominal)`. Every doubling of the
+  woodpile is worth a flat ~6.9m, so 300 logs throws 46m and 1200 logs throws
+  60m. The coefficient (10) was set by measurement, not taste. Per frame per
+  light the client casts a visibility polygon and stamps the memory field, and
+  both grow faster than the radius: on the tube map at camp, **14m costs 0.7ms,
+  46m costs 3.9ms, 60m costs 7.5ms, and 80m costs 16ms — the entire 60fps
+  frame**. Ten puts a realistic hoard at a quarter of the budget and needs 2400
+  logs to reach 67m. That self-limiting curve is the only reason no hard clamp
+  was needed; **raising this coefficient is a performance change, not a taste
+  change**.
+
+  Two consequences worth knowing:
+
+  - **The beacon does not get worse.** `CREATURE_FIRE_BEACON_MULT` (90) already
+    saturates at roaring — 14m × 90 = 1260m is longer than the 1200m map — so
+    growing the radius does not summon anything extra. Over-stoking buys light
+    and a wider perimeter at no cost in creature attention. The only price is
+    wood, deliberately.
+  - **`campPresenceRangeM` in `sim/creatures.ts` exists because of this.** The
+    perimeter passes `CREATURE_SIEGE_RANGE_M` (40m) at about 890 logs, and the
+    flat gate would then sit *inside* the ring the creature is excluded from: it
+    could never get close enough to decide to prowl or to take the woodpile, so
+    it would walk at camp forever and be shoved back every tick. The gate now
+    stays outside the perimeter it describes, and returns the flat 40 for any
+    fire of ordinary size.
+
+  **Pre-existing, not caused by this, but now permanent:** `sabotage` is a dead
+  end whenever the woodpile sits inside the safe radius, which is true of any
+  fire above ~62 fuel — the creature walks to the perimeter and grinds there
+  instead of reaching the pile. Verified against the pre-change build, which does
+  the same thing at nominal. It used to be a phase you burned through; with a big
+  fire it is the steady state, so **Q24's primary sabotage effectively does not
+  fire while the camp is well fed**. Worth a decision before or during Step 7 —
+  either the perimeter should not shield the pile, or the pile belongs outside
+  it.
 
 ## 7. Controls beyond Q126
 
