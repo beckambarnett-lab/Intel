@@ -6,6 +6,12 @@ technology stack settled and per-step acceptance gates. It was produced in a lon
 and every number in it is deliberate. Do not re-derive, re-litigate, or "improve" its decisions
 without asking — if something looks wrong, raise it, don't silently change it.
 
+**Then read `DECISIONS.md`, and read it second on purpose.** It is short, and it records the handful
+of places where playtesting overturned a locked decision — creature senses, the launch, the fuel
+caps. Where the two disagree, `DECISIONS.md` wins and says why. Several of its entries replaced a
+first attempt that was wrong in an instructive way; the wrong version is usually the obvious one, so
+building straight from `DESIGN.md` will re-derive it.
+
 ## What this is
 
 A multiplayer top-down survival horror game played in the dark. A bonfire eats wood and wood is the
@@ -14,7 +20,8 @@ commanded by a live LLM. You win by carrying the amulet of darkness back to your
 
 ## Status
 
-Design complete. **No code written yet.** Start at `DESIGN.md` §21, Step 1.
+**Steps 1–6 are built and playable.** Next: remove the bonfire's fuel cap (`DECISIONS.md` §6 — it is
+not a tweak, and the open question there needs answering first), then `DESIGN.md` §21, Step 7.
 
 ## The rules that must not be broken
 
@@ -41,13 +48,13 @@ These hold up other systems. Breaking one is a design change, not a refactor.
 Steps are sequential and each is playable. Do not skip ahead. Steps 2, 5 and 10 are architecturally
 irreversible if done late.
 
-1. Skeleton — monorepo, authoritative server, client prediction
-2. **Darkness** — shadowcasting, lantern, visibility culling *(irreversible)*
-3. The clock — fire, fuel, tiers, ember grace, horizon bloom
-4. The loop — weight, chopping, logs, woodpile
-5. **Memory rot** — decay shader, distortion, phantoms *(irreversible)*
-6. Creatures, scripted — senses, states, sabotage
-7. The duel — listen mode, blips, gun, desperation
+1. ~~Skeleton — monorepo, authoritative server, client prediction~~ *(done)*
+2. ~~**Darkness** — shadowcasting, lantern, visibility culling~~ *(done, irreversible)*
+3. ~~The clock — fire, fuel, tiers, ember grace, horizon bloom~~ *(done)*
+4. ~~The loop — weight, chopping, logs, woodpile~~ *(done)*
+5. ~~**Memory rot** — decay shader, distortion, phantoms~~ *(done, irreversible)*
+6. ~~Creatures, scripted — senses, states, sabotage~~ *(done; senses reworked — `DECISIONS.md` §1–5)*
+7. The duel — listen mode, blips, gun, desperation *(designed in `DECISIONS.md`)*
 8. Death & ghosts — corpses, bonfire sacrifice
 9. Crafting & scrap — 3 stations, 18 recipes
 10. **LLM director** — fairness boundary first *(irreversible)*
