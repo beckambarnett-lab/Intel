@@ -489,6 +489,45 @@ export const CREATURE_SABOTAGE_THROW_M = 6;
 /** Logs and branches hurled per scatter. */
 export const CREATURE_SABOTAGE_TAKE = 4;
 
+/**
+ * How vague a light makes you (L12: "they hunt your light").
+ *
+ * A creature never learns where you ARE — it learns where the glow is, and
+ * heads for a point somewhere inside it. This multiplier is how much of the
+ * light's own radius becomes error at the far edge of detection; the error
+ * shrinks to nothing as it closes, so it still catches you at arm's length.
+ *
+ * At 1.0 a full lantern's 9m circle means a hunter 45m away is guessing at a
+ * spot up to 9m off. That is the trade the shutter exists for: a bright lantern
+ * is seen from further AND tells them less, so neither stage dominates. It is
+ * also why a big camp fire is safe — they know somebody is at the bonfire, not
+ * which side of it you are standing on.
+ */
+export const CREATURE_LIGHT_ERROR_MULT = 1;
+
+/**
+ * Metres, beyond the edge of a light, over which a creature loses the source.
+ *
+ * The model is physical: standing INSIDE your lit circle it can see you, so the
+ * error is zero. Step outside and it has only the glow to go on, and over this
+ * distance its guess degrades to anywhere within the glow's radius.
+ *
+ * Scaling the error by distance-over-detection-range instead — the obvious
+ * first try — has it backwards. A full lantern is seen from 45m and a low one
+ * from 18m, so at any shared distance the full lantern would come out as the
+ * MORE precise of the two, and brighter would be strictly better again.
+ */
+export const CREATURE_LIGHT_RESOLVE_M = 8;
+
+/**
+ * How long a creature commits to one guess before re-estimating, in seconds.
+ *
+ * Re-rolling every tick would make it wobble on the spot like a bad animation.
+ * Committing for a beat, arriving, and finding nothing is what feeds the
+ * Investigate state — and it is what gives you the window to be somewhere else.
+ */
+export const CREATURE_PERCEPTION_REFRESH_SEC = 0.6;
+
 /** Seconds between sniffs while hunting (Q69). */
 export const CREATURE_SNIFF_MIN_SEC = 2;
 export const CREATURE_SNIFF_MAX_SEC = 4;

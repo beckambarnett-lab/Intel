@@ -447,3 +447,142 @@ describe('creatures never reach for a player directly', () => {
     }
   });
 });
+
+/**
+ * L12: "they hunt your light." Not you.
+ *
+ * These are the assertions that keep the shutter a decision. A creature never
+ * receives a player's position — it receives a point inside the glow — so a
+ * bright lantern buys reach at the cost of precision and a hooded one buys
+ * precision at the cost of reach.
+ */
+describe('creatures hunt the light, not the player (L12)', () => {
+  function lightAt(stage: 'hooded' | 'low' | 'full', creatureAt: number) {
+    const s = scene({ creatureAt: { x: creatureAt, y: 30 } });
+    s.player.lantern.stage = stage;
+    s.player.lantern.target = stage;
+    return s;
+  }
+
+  /** Distance from the creature's guess to where the player actually is. */
+  function guessError(s: ReturnType<typeof scene>): number {
+    const g = s.c.lastLight;
+    if (!g) return Infinity;
+    return Math.hypot(g.x - s.player.pos.x, g.y - s.player.pos.y);
+  }
+
+  it('never lands exactly on the player at range', () => {
+    const s = lightAt('full', 180);
+    creatureSense(s.world, TICK_DT);
+    expect(s.c.lastLight).not.toBeNull();
+    expect(guessError(s)).toBeGreaterThan(0);
+  });
+
+  it('is vaguer about a big light than a small one', () => {
+    // Sampled across many ticks so this measures the distributions rather than
+    // one draw of the PRNG.
+    const sample = (stage: 'low' | 'full'): number => {
+      let total = 0;
+      let n = 0;
+      for (let t = 0; t < 400; t++) {
+        const s = lightAt(stage, 165);
+        s.world.tick = t * 20;
+        creatureSense(s.world, TICK_DT);
+        if (s.c.lastLight) {
+          total += guessError(s);
+          n++;
+        }
+      }
+      return n > 0 ? total / n : 0;
+    };
+
+    // A 9m lantern should mislead them substantially more than a 4m one.
+    expect(sample('full')).toBeGreaterThan(sample('low'));
+  });
+
+  it('gets more accurate as it closes', () => {
+    const sample = (creatureAt: number): number => {
+      let total = 0;
+      let n = 0;
+      for (let t = 0; t < 400; t++) {
+        const s = lightAt('full', creatureAt);
+        s.world.tick = t * 20;
+        creatureSense(s.world, TICK_DT);
+        if (s.c.lastLight) {
+          total += guessError(s);
+          n++;
+        }
+      }
+      return n > 0 ? total / n : 0;
+    };
+
+    // 40m out it is guessing; 3m out it is looking straight at you.
+    expect(sample(190)).toBeGreaterThan(sample(153));
+  });
+
+  it('is looking right at you at contact range', () => {
+    const s = lightAt('full', 150.5);
+    creatureSense(s.world, TICK_DT);
+    expect(guessError(s)).toBeLessThan(0.5);
+  });
+
+  it('cannot pinpoint you inside a big fire’s glow', () => {
+    // Hooded lantern at the bonfire: what they have found is the FIRE, so the
+    // fire's radius is the vagueness. Camp is safe because it is bright.
+    let total = 0;
+    let n = 0;
+    for (let t = 0; t < 300; t++) {
+      const s = scene({ playerAt: { x: 9, y: 5 }, creatureAt: { x: 28, y: 5 } });
+      s.player.lantern.stage = 'hooded';
+      s.player.lantern.target = 'hooded';
+      s.world.fire.fuel = FIRE_CAPACITY;
+      refreshFire(s.world.fire);
+      s.world.tick = t * 20;
+      creatureSense(s.world, TICK_DT);
+      if (s.c.lastLight) {
+        total += Math.hypot(s.c.lastLight.x - s.player.pos.x, s.c.lastLight.y - s.player.pos.y);
+        n++;
+      }
+    }
+    expect(n).toBeGreaterThan(0);
+    expect(total / n).toBeGreaterThan(1);
+  });
+
+  it('commits to a guess rather than jittering every tick', () => {
+    const s = lightAt('full', 180);
+    creatureSense(s.world, TICK_DT);
+    const first = { ...s.c.lastLight! };
+
+    // A couple of ticks later, inside the same refresh window.
+    s.world.tick += 2;
+    creatureSense(s.world, TICK_DT);
+
+    expect(s.c.lastLight!.x).toBeCloseTo(first.x, 6);
+    expect(s.c.lastLight!.y).toBeCloseTo(first.y, 6);
+  });
+
+  it('re-estimates once the window passes', () => {
+    const s = lightAt('full', 180);
+    creatureSense(s.world, TICK_DT);
+    const first = { ...s.c.lastLight! };
+
+    s.world.tick += 40;
+    creatureSense(s.world, TICK_DT);
+
+    const moved = Math.hypot(s.c.lastLight!.x - first.x, s.c.lastLight!.y - first.y);
+    expect(moved).toBeGreaterThan(0);
+  });
+
+  it('still closes on you despite guessing wrong', () => {
+    const s = lightAt('full', 175);
+    const before = s.c.pos.x;
+    run(s.world, 3);
+    expect(s.c.pos.x).toBeLessThan(before - 5);
+  });
+
+  it('still kills you when it arrives', () => {
+    const s = lightAt('full', 154);
+    run(s.world, 4);
+    expect(s.player.alive).toBe(false);
+  });
+});

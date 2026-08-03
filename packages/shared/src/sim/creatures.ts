@@ -6,7 +6,10 @@ import {
   CREATURE_DESPERATE_SPEED_MULT,
   CREATURE_INVESTIGATE_SEC,
   CREATURE_LIGHT_MEMORY_SEC,
+  CREATURE_LIGHT_ERROR_MULT,
+  CREATURE_LIGHT_RESOLVE_M,
   CREATURE_PATROL_REPICK_SEC,
+  CREATURE_PERCEPTION_REFRESH_SEC,
   CREATURE_PATROL_SPEED_MULT,
   CREATURE_PURSUE_SPEED_MULT,
   CREATURE_RADIUS,
@@ -30,11 +33,12 @@ import {
 import type { ZoneName } from '../constants.js';
 import { isBlockedAt } from '../grid.js';
 import { canSee, raycastLOS } from '../los.js';
+import { TICK_DT } from '../constants.js';
 import { clamp, mulberry32 } from '../math.js';
 import type { Vec2 } from '../math.js';
 import { fuelFraction } from './fire.js';
 import { spawnItem } from './items.js';
-import { lanternSeenAt } from './lantern.js';
+import { lanternRadius, lanternSeenAt } from './lantern.js';
 import { emit, loudestAudibleAt } from './sound.js';
 import { ITEM_KINDS } from '../types.js';
 import type { Creature, CreatureState, ItemKind, WorldState } from '../types.js';
@@ -76,9 +80,9 @@ export function creatureSense(world: WorldState, dt: number): void {
     c.lightMemorySec = Math.max(0, c.lightMemorySec - dt);
     c.soundMemorySec = Math.max(0, c.soundMemorySec - dt);
 
-    const lit = brightestVisiblePlayer(world, c, fireFrac);
+    const lit = brightestVisibleLight(world, c, fireFrac);
     if (lit) {
-      c.lastLight = { x: lit.x, y: lit.y };
+      c.lastLight = perceive(world, c, lit);
       c.lightMemorySec = CREATURE_LIGHT_MEMORY_SEC;
       // A creature locked onto a light is not listening (L12). Dropping the
       // sound memory here rather than merely ignoring it means that when the
@@ -98,17 +102,26 @@ export function creatureSense(world: WorldState, dt: number): void {
   }
 }
 
+/** A light a creature can see, and how big and how far off it is. */
+interface SeenLight {
+  pos: Vec2;
+  /** The glow's own radius. Wider means a vaguer idea of where you are. */
+  radiusM: number;
+  dist: number;
+}
+
 /**
  * The nearest light this creature can actually see.
  *
  * Detection range comes from the lantern itself (Q37/Q59) — hooded is 4m, full
- * is 45m, wider still mid-bloom — plus line of sight through the true grid. A player standing in
- * firelight is visible much further (CREATURE_SEES_FIRELIT_M) whatever their
- * shutter is doing, because a fire lights bodies and hiding at the bonfire by
- * closing a lantern would be nonsense.
+ * is 45m, wider still mid-bloom — plus line of sight through the true grid. A
+ * player standing in firelight is visible much further whatever their shutter
+ * is doing, because a fire lights bodies and hiding at the bonfire by closing a
+ * lantern would be nonsense; in that case the FIRE is the light they have
+ * found, which is why its radius is what makes camp so hard to pinpoint in.
  */
-function brightestVisiblePlayer(world: WorldState, c: Creature, fireFrac: number): Vec2 | null {
-  let best: Vec2 | null = null;
+function brightestVisibleLight(world: WorldState, c: Creature, fireFrac: number): SeenLight | null {
+  let best: SeenLight | null = null;
   let bestDist = Infinity;
 
   const fire = world.fire;
@@ -122,15 +135,23 @@ function brightestVisiblePlayer(world: WorldState, c: Creature, fireFrac: number
     // off the struct: mid-shutter and mid-bloom are real states a player can be
     // caught in, and a creature must see the light that is actually there.
     let range = lanternSeenAt(p.lantern);
+    let radius = lanternRadius(p.lantern);
+
+    // Standing in firelight: what they have spotted is the FIRE lighting a
+    // body, so the fire's radius is the vagueness, not the lantern's. A roaring
+    // camp is a 14m glow with somebody in it somewhere.
     if (firelit && canSee(world.grid, fire.pos, fire.lightRadiusM, p.pos)) {
-      range = Math.max(range, CREATURE_SEES_FIRELIT_M);
+      if (CREATURE_SEES_FIRELIT_M > range) {
+        range = CREATURE_SEES_FIRELIT_M;
+        radius = Math.max(radius, fire.lightRadiusM);
+      }
     }
 
     const d = Math.hypot(p.pos.x - c.pos.x, p.pos.y - c.pos.y);
     if (d > range || d >= bestDist) continue;
     if (!raycastLOS(world.grid, c.pos, p.pos)) continue;
 
-    best = p.pos;
+    best = { pos: p.pos, radiusM: radius, dist: d };
     bestDist = d;
   }
 
@@ -147,11 +168,61 @@ function brightestVisiblePlayer(world: WorldState, c: Creature, fireFrac: number
     if (d > range || d >= bestDist) continue;
     if (!raycastLOS(world.grid, c.pos, dl.pos)) continue;
 
-    best = dl.pos;
+    best = { pos: dl.pos, radiusM: lanternRadius(dl.lantern), dist: d };
     bestDist = d;
   }
 
   return best;
+}
+
+/**
+ * Where the creature THINKS the light is (L12: "they hunt your light").
+ *
+ * This is the single most important function in the creature model. A hunter
+ * never receives your position — it receives a point somewhere inside the glow
+ * it can see, and it commits to that point for a beat before re-estimating.
+ *
+ * Two consequences fall out of it, and both are the design working rather than
+ * side effects. A brighter lantern is spotted from further away AND tells them
+ * less, so no shutter stage dominates and the choice stays live. And a big fire
+ * makes camp genuinely hard to pinpoint inside — they know somebody is at the
+ * bonfire, not which side of it you are on, which is why you can watch them
+ * come in across lit ground.
+ *
+ * The error collapses as they close, so this never makes them harmless: at
+ * arm's length they are looking straight at you.
+ */
+function perceive(world: WorldState, c: Creature, light: SeenLight): Vec2 {
+  // Inside the lit circle it is looking straight at you. Outside, its idea of
+  // where you are degrades over CREATURE_LIGHT_RESOLVE_M until it knows only
+  // the glow — which is why a wider glow is a worse answer, not a better one.
+  const beyond = Math.max(0, light.dist - light.radiusM);
+  const vagueness = clamp(beyond / CREATURE_LIGHT_RESOLVE_M, 0, 1);
+  const spread = light.radiusM * CREATURE_LIGHT_ERROR_MULT * vagueness;
+  if (spread <= 0) return { x: light.pos.x, y: light.pos.y };
+
+  const r = perceptionRng(world, c);
+  const angle = r() * Math.PI * 2;
+  // sqrt for a uniform scatter over the disc rather than a bias toward the
+  // centre — the guess should be anywhere in the glow, not usually near you.
+  const mag = Math.sqrt(r()) * spread;
+
+  return { x: light.pos.x + Math.cos(angle) * mag, y: light.pos.y + Math.sin(angle) * mag };
+}
+
+/**
+ * A PRNG that changes only every CREATURE_PERCEPTION_REFRESH_SEC.
+ *
+ * Re-rolling per tick would make a creature jitter on the spot instead of
+ * committing to a guess, walking to it, and finding nothing there — and that
+ * arrival-at-the-wrong-place is what feeds Investigate and gives you the window
+ * to be somewhere else.
+ */
+function perceptionRng(world: WorldState, c: Creature): () => number {
+  const bucket = Math.floor(world.tick / Math.max(1, Math.round(CREATURE_PERCEPTION_REFRESH_SEC / TICK_DT)));
+  let h = (CREATURE_RNG_SEED ^ bucket) | 0;
+  for (let i = 0; i < c.id.length; i++) h = (Math.imul(h, 31) + c.id.charCodeAt(i)) | 0;
+  return mulberry32(h >>> 0);
 }
 
 // ---------------------------------------------------------------------------
