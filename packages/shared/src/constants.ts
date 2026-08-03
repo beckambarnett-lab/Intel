@@ -532,59 +532,12 @@ export const CREATURE_DARK_SIGHT_M = 60;
  */
 export const CREATURE_CURIOSITY_M = 120;
 
-/**
- * Floor on how far off a curious creature's guess is, in metres.
- *
- * A hint is a hint whatever your lantern is doing, so this overrides the usual
- * glow-radius error out in the curiosity band — otherwise a player creeping
- * about hooded would be pinpointed from 120m, which is sharper than they can
- * manage at 30m. It drifts at your general area, not at you.
- */
-export const CREATURE_CURIOSITY_ERROR_M = 25;
-
 /** Sabotage (Q24): seconds to scatter the pile, and how far the logs fly. */
 export const CREATURE_SABOTAGE_SEC = 3;
 export const CREATURE_SABOTAGE_THROW_M = 6;
 
 /** Logs and branches hurled per scatter. */
 export const CREATURE_SABOTAGE_TAKE = 4;
-
-/**
- * How much a light dazzles, as a multiple of its own radius.
- *
- * A creature never learns where you ARE — it learns roughly where the glow is
- * and heads for a point inside it. A wider glow is a worse answer, so a full
- * lantern's 9m circle leaves a hunter guessing at a spot up to 9m off while a
- * hooded one barely misles it at all.
- *
- * This is the entire defensive value of light, and it is why camp is safe: a
- * roaring bonfire is a 14m glow with somebody in it somewhere, so they know you
- * are at the fire and not which side of it you are standing on.
- */
-export const CREATURE_LIGHT_ERROR_MULT = 1;
-
-/**
- * Metres, beyond the edge of a light, over which a creature loses the source.
- *
- * The model is physical: standing INSIDE your lit circle it can see you, so the
- * error is zero. Step outside and it has only the glow to go on, and over this
- * distance its guess degrades to anywhere within the glow's radius.
- *
- * Scaling the error by distance-over-detection-range instead — the obvious
- * first try — has it backwards. A full lantern is seen from 45m and a low one
- * from 18m, so at any shared distance the full lantern would come out as the
- * MORE precise of the two, and brighter would be strictly better again.
- */
-export const CREATURE_LIGHT_RESOLVE_M = 8;
-
-/**
- * How long a creature commits to one guess before re-estimating, in seconds.
- *
- * Re-rolling every tick would make it wobble on the spot like a bad animation.
- * Committing for a beat, arriving, and finding nothing is what feeds the
- * Investigate state — and it is what gives you the window to be somewhere else.
- */
-export const CREATURE_PERCEPTION_REFRESH_SEC = 0.6;
 
 /** Seconds between sniffs while hunting (Q69). */
 export const CREATURE_SNIFF_MIN_SEC = 2;

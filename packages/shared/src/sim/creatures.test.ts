@@ -8,7 +8,6 @@ import {
   CREATURE_SABOTAGE_SEC,
   CREATURE_SOUND_MEMORY_SEC,
   FIRE_CAPACITY,
-  CREATURE_CURIOSITY_ERROR_M,
   CREATURE_CURIOSITY_M,
   CREATURE_LAUNCH_MIN_RANGE_M,
   CREATURE_LAUNCH_SPEED_MULT,
@@ -27,7 +26,7 @@ import {
   TICK_DT,
 } from '../constants.js';
 import { setTile } from '../grid.js';
-import { createPlayer, createWorld } from '../types.js';
+import { createLantern, createPlayer, createWorld } from '../types.js';
 import type { Creature, WorldState } from '../types.js';
 import {
   createCreature,
@@ -495,222 +494,78 @@ describe('creatures never reach for a player directly', () => {
 });
 
 /**
- * L12: "they hunt your light." Not you.
+ * It aims at the centre of the brightest thing it can see — never at you.
  *
- * These are the assertions that keep the shutter a decision. A creature never
- * receives a player's position — it receives a point inside the glow — so a
- * bright lantern buys reach at the cost of precision and a hooded one buys
- * precision at the cost of reach.
+ * One rule, and the whole counterplay falls out of it: hold a lantern and you
+ * ARE the centre; stand in firelight and the bonfire is; put the lantern down
+ * and the lantern is.
  */
-describe('creatures hunt the light, not the player (L12)', () => {
-  function lightAt(stage: 'hooded' | 'low' | 'full', creatureAt: number) {
-    const s = scene({ creatureAt: { x: creatureAt, y: 30 } });
-    s.player.lantern.stage = stage;
-    s.player.lantern.target = stage;
-    return s;
-  }
+describe('creatures aim at the light, not the player', () => {
+  it('comes straight at you when the lantern is in your hand', () => {
+    const { world, player, c } = scene({ creatureAt: { x: 180, y: 30 } });
+    player.lantern.stage = 'full';
+    player.lantern.target = 'full';
 
-  /** Distance from the creature's guess to where the player actually is. */
-  function guessError(s: ReturnType<typeof scene>): number {
-    const g = s.c.lastLight;
-    if (!g) return Infinity;
-    return Math.hypot(g.x - s.player.pos.x, g.y - s.player.pos.y);
-  }
-
-  it('never lands exactly on the player at range', () => {
-    const s = lightAt('full', 180);
-    creatureSense(s.world, TICK_DT);
-    expect(s.c.lastLight).not.toBeNull();
-    expect(guessError(s)).toBeGreaterThan(0);
+    creatureSense(world, TICK_DT);
+    expect(c.lastLight?.x).toBeCloseTo(player.pos.x, 5);
+    expect(c.lastLight?.y).toBeCloseTo(player.pos.y, 5);
   });
 
-  it('is vaguer about a big light than a small one', () => {
-    // Sampled across many ticks so this measures the distributions rather than
-    // one draw of the PRNG.
-    const sample = (stage: 'low' | 'full'): number => {
-      let total = 0;
-      let n = 0;
-      for (let t = 0; t < 400; t++) {
-        const s = lightAt(stage, 165);
-        s.world.tick = t * 20;
-        creatureSense(s.world, TICK_DT);
-        if (s.c.lastLight) {
-          total += guessError(s);
-          n++;
-        }
-      }
-      return n > 0 ? total / n : 0;
-    };
-
-    // A 9m lantern should mislead them substantially more than a 4m one.
-    expect(sample('full')).toBeGreaterThan(sample('low'));
-  });
-
-  it('gets more accurate as it closes', () => {
-    const sample = (creatureAt: number): number => {
-      let total = 0;
-      let n = 0;
-      for (let t = 0; t < 400; t++) {
-        const s = lightAt('full', creatureAt);
-        s.world.tick = t * 20;
-        creatureSense(s.world, TICK_DT);
-        if (s.c.lastLight) {
-          total += guessError(s);
-          n++;
-        }
-      }
-      return n > 0 ? total / n : 0;
-    };
-
-    // 40m out it is guessing; 3m out it is looking straight at you.
-    expect(sample(190)).toBeGreaterThan(sample(153));
-  });
-
-  it('is looking right at you at contact range', () => {
-    const s = lightAt('full', 150.5);
-    creatureSense(s.world, TICK_DT);
-    expect(guessError(s)).toBeLessThan(0.5);
-  });
-
-  it('cannot pinpoint you inside a big fire’s glow', () => {
-    // Hooded lantern at the bonfire: what they have found is the FIRE, so the
-    // fire's radius is the vagueness. Camp is safe because it is bright.
-    let total = 0;
-    let n = 0;
-    for (let t = 0; t < 300; t++) {
-      const s = scene({ playerAt: { x: 9, y: 5 }, creatureAt: { x: 28, y: 5 } });
-      s.player.lantern.stage = 'hooded';
-      s.player.lantern.target = 'hooded';
-      s.world.fire.fuel = FIRE_CAPACITY;
-      refreshFire(s.world.fire);
-      s.world.tick = t * 20;
-      creatureSense(s.world, TICK_DT);
-      if (s.c.lastLight) {
-        total += Math.hypot(s.c.lastLight.x - s.player.pos.x, s.c.lastLight.y - s.player.pos.y);
-        n++;
-      }
-    }
-    expect(n).toBeGreaterThan(0);
-    expect(total / n).toBeGreaterThan(1);
-  });
-
-  it('commits to a guess rather than jittering every tick', () => {
-    const s = lightAt('full', 180);
-    creatureSense(s.world, TICK_DT);
-    const first = { ...s.c.lastLight! };
-
-    // A couple of ticks later, inside the same refresh window.
-    s.world.tick += 2;
-    creatureSense(s.world, TICK_DT);
-
-    expect(s.c.lastLight!.x).toBeCloseTo(first.x, 6);
-    expect(s.c.lastLight!.y).toBeCloseTo(first.y, 6);
-  });
-
-  it('re-estimates once the window passes', () => {
-    const s = lightAt('full', 180);
-    creatureSense(s.world, TICK_DT);
-    const first = { ...s.c.lastLight! };
-
-    s.world.tick += 40;
-    creatureSense(s.world, TICK_DT);
-
-    const moved = Math.hypot(s.c.lastLight!.x - first.x, s.c.lastLight!.y - first.y);
-    expect(moved).toBeGreaterThan(0);
-  });
-
-  it('still closes on you despite guessing wrong', () => {
-    const s = lightAt('full', 175);
-    const before = s.c.pos.x;
-    run(s.world, 3);
-    expect(s.c.pos.x).toBeLessThan(before - 5);
-  });
-
-  it('still kills you when it arrives', () => {
-    const s = lightAt('full', 154);
-    run(s.world, 4);
-    expect(s.player.alive).toBe(false);
-  });
-});
-
-
-/**
- * The bonfire is a beacon (Q13's horizon bloom, read from the other side).
- *
- * This is the trade the game turns on: a big fire holds the perimeter and makes
- * you impossible to pinpoint inside its glow, and it is also the thing that
- * tells every creature in the wood where you live.
- */
-describe('the fire draws them in', () => {
-  /** A creature far down the tube with nothing else to react to. */
-  function distant(fuel: number) {
-    const world = createWorld(1200, 250);
-    world.fire.pos = { x: 40, y: 125 };
-    world.fire.fuel = fuel;
-    world.fire.dead = fuel <= 0;
-    refreshFire(world.fire);
-
-    const c = createCreature('c1', { x: 900, y: 125 }, 'deepWood');
-    world.creatures['c1'] = c;
-    return { world, c };
-  }
-
-  it('is seen from far beyond anything they could see a player at', () => {
-    const { world } = distant(FIRE_CAPACITY);
-    expect(fireBeaconRangeM(world)).toBeGreaterThan(CREATURE_DARK_SIGHT_M * 10);
-  });
-
-  it('reaches further the bigger it is', () => {
-    const roaring = fireBeaconRangeM(distant(FIRE_CAPACITY).world);
-    const guttering = fireBeaconRangeM(distant(FIRE_CAPACITY * 0.05).world);
-
-    expect(roaring).toBeGreaterThan(guttering);
-    expect(guttering).toBeGreaterThan(0);
-  });
-
-  it('reaches nothing at all once the fire is out', () => {
-    expect(fireBeaconRangeM(distant(0).world)).toBe(0);
-  });
-
-  it('pulls a creature the length of the tube toward camp', () => {
-    const { world, c } = distant(FIRE_CAPACITY);
-    const before = c.pos.x;
-
-    run(world, 10);
-
-    expect(c.state).toBe('return');
-    expect(c.pos.x).toBeLessThan(before - 50);
-  });
-
-  it('lets the far ones lose interest when it burns down', () => {
-    const { world, c } = distant(FIRE_CAPACITY);
-    run(world, 1);
-    expect(c.state).toBe('return');
-
-    // Fire collapses to embers: the glow no longer reaches this far out.
-    world.fire.fuel = 0;
-    world.fire.dead = true;
-    refreshFire(world.fire);
-    run(world, 1);
-
-    expect(fireBeaconRangeM(world)).toBe(0);
-  });
-
-  it('prowls the perimeter once it arrives rather than standing still', () => {
-    const world = createWorld(1200, 250);
-    world.fire.pos = { x: 40, y: 125 };
+  it('aims at the bonfire, not at you, while you stand in its light', () => {
+    // Camp is safe because it is bright: it charges the FIRE and you are off to
+    // one side of it. The bigger the fire, the further off to one side you can
+    // stand and still be in the glow.
+    const { world, player, c } = scene({
+      playerAt: { x: 11, y: 5 },
+      creatureAt: { x: 40, y: 5 },
+    });
+    player.lantern.stage = 'hooded';
+    player.lantern.target = 'hooded';
     world.fire.fuel = FIRE_CAPACITY;
     refreshFire(world.fire);
 
-    const c = createCreature('c1', { x: 60, y: 125 }, 'camp');
-    world.creatures['c1'] = c;
+    creatureSense(world, TICK_DT);
+    expect(c.lastLight?.x).toBeCloseTo(world.fire.pos.x, 5);
+    expect(c.lastLight?.y).toBeCloseTo(world.fire.pos.y, 5);
+    // And that is not where you are standing.
+    expect(Math.abs((c.lastLight?.x ?? 0) - player.pos.x)).toBeGreaterThan(3);
+  });
 
-    run(world, 8);
+  it('commits to a lantern you put down rather than to you (Q41)', () => {
+    const { world, player, c } = scene({ creatureAt: { x: 180, y: 30 } });
+    player.lantern.stage = 'hooded';
+    player.lantern.target = 'hooded';
 
-    // Q7: never inside the safe radius while the fire holds.
-    const d = Math.hypot(c.pos.x - world.fire.pos.x, c.pos.y - world.fire.pos.y);
-    expect(d).toBeGreaterThanOrEqual(world.fire.safeRadiusM - 1e-6);
-    expect(d).toBeLessThan(CREATURE_SIEGE_RANGE_M * 2);
+    // A lit lantern on the ground outshines a player standing in the dark.
+    world.droppedLanterns['dl1'] = {
+      id: 'dl1',
+      pos: { x: 160, y: 45 },
+      lantern: { ...createLantern(), stage: 'full', target: 'full' },
+    };
+
+    creatureSense(world, TICK_DT);
+    expect(c.lastLight?.x).toBeCloseTo(160, 5);
+    expect(c.lastLight?.y).toBeCloseTo(45, 5);
+  });
+
+  it('has nothing to fix on but you when you carry no light', () => {
+    const { world, player, c } = scene({ creatureAt: { x: 180, y: 30 } });
+    player.lantern.fuel = 0;
+
+    creatureSense(world, TICK_DT);
+    expect(c.lastLight?.x).toBeCloseTo(player.pos.x, 5);
+  });
+
+  it('is deterministic — no guessing, so no coin flips', () => {
+    const a = scene({ creatureAt: { x: 180, y: 30 } });
+    const b = scene({ creatureAt: { x: 180, y: 30 } });
+    a.world.tick = 17;
+    b.world.tick = 4021;
+
+    creatureSense(a.world, TICK_DT);
+    creatureSense(b.world, TICK_DT);
+    expect(a.c.lastLight?.x).toBe(b.c.lastLight?.x);
+    expect(a.c.lastLight?.y).toBe(b.c.lastLight?.y);
   });
 });
 
@@ -768,24 +623,6 @@ describe('curiosity (the band between noticing and knowing)', () => {
     const charge = Math.hypot(chasing.c.vel.x, chasing.c.vel.y);
 
     expect(drift).toBeLessThan(charge);
-  });
-
-  it('is vague about where you are even if you are hooded', () => {
-    // A hint is a hint. Creeping about dark must not be MORE findable at 90m
-    // than it is at 30m, which is what happens without the error floor.
-    let total = 0;
-    let n = 0;
-    for (let t = 0; t < 300; t++) {
-      const s = atRange(90, 'hooded');
-      s.world.tick = t * 20;
-      creatureSense(s.world, TICK_DT);
-      if (s.c.lastLight) {
-        total += Math.hypot(s.c.lastLight.x - s.player.pos.x, s.c.lastLight.y - s.player.pos.y);
-        n++;
-      }
-    }
-    expect(n).toBeGreaterThan(0);
-    expect(total / n).toBeGreaterThan(CREATURE_CURIOSITY_ERROR_M / 3);
   });
 
   it('closes the distance while curious, and escalates when it arrives', () => {
@@ -915,36 +752,18 @@ describe('the launch', () => {
     expect(dodging.player.alive).toBe(true);
   });
 
-  it('misses more often against a bright lantern than a hooded one', () => {
-    // Averaged over many seeds. The aiming error is a uniform disc, so a single
-    // draw is often mostly radial — harmless to a charge running straight
-    // through you — and proves nothing either way.
-    const missRate = (stage: 'hooded' | 'full'): number => {
-      let missed = 0;
-      const trials = 60;
-
-      for (let t = 0; t < trials; t++) {
-        const { world, player, c } = duel(stage, 20);
-        world.tick = t * 37;
-
-        let launched = false;
-        for (let i = 0; i < Math.round(4 / TICK_DT); i++) {
-          if (c.state === 'launch') launched = true;
-          emitSounds(world);
-          creatureSense(world, TICK_DT);
-          creatureAct(world, TICK_DT);
-          world.tick++;
-          if (!player.alive) break;
-        }
-
-        if (launched && player.alive) missed++;
-      }
-
-      return missed / trials;
+  it('charges the lantern you set down and misses you entirely (Q41)', () => {
+    const { world, player, c } = duel('hooded', 20);
+    // Put a lit lantern well off to one side and stand away from it.
+    world.droppedLanterns['dl1'] = {
+      id: 'dl1',
+      pos: { x: 200, y: 130 },
+      lantern: { ...createLantern(), stage: 'full', target: 'full' },
     };
 
-    // A nine-metre glow leaves it guessing; a hooded lantern does not.
-    expect(missRate('full')).toBeGreaterThan(missRate('hooded'));
+    run(world, 4);
+    expect(player.alive).toBe(true);
+    void c;
   });
 
   it('spends stamina to charge and cannot chain them', () => {

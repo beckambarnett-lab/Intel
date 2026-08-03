@@ -24,10 +24,7 @@ import {
   CREATURE_DESPERATE_SPEED_MULT,
   CREATURE_INVESTIGATE_SEC,
   CREATURE_LIGHT_MEMORY_SEC,
-  CREATURE_LIGHT_ERROR_MULT,
-  CREATURE_LIGHT_RESOLVE_M,
   CREATURE_PATROL_REPICK_SEC,
-  CREATURE_PERCEPTION_REFRESH_SEC,
   CREATURE_PATROL_SPEED_MULT,
   CREATURE_PURSUE_SPEED_MULT,
   CREATURE_RADIUS,
@@ -36,7 +33,6 @@ import {
   CREATURE_SABOTAGE_SEC,
   CREATURE_SABOTAGE_TAKE,
   CREATURE_SABOTAGE_THROW_M,
-  CREATURE_CURIOSITY_ERROR_M,
   CREATURE_CURIOSITY_M,
   CREATURE_DARK_SIGHT_M,
   CREATURE_FIRE_BEACON_MULT,
@@ -113,7 +109,7 @@ export function creatureSense(world: WorldState, dt: number): void {
 
     const lit = brightestVisibleLight(world, c, fireFrac);
     if (lit) {
-      c.lastLight = perceive(world, c, lit);
+      c.lastLight = perceive(lit);
       c.certain = lit.certain;
       c.lightMemorySec = CREATURE_LIGHT_MEMORY_SEC;
       // A creature locked onto a light is not listening (L12). Dropping the
@@ -154,7 +150,6 @@ interface SeenLight {
  */
 function brightestVisibleLight(world: WorldState, c: Creature, fireFrac: number): SeenLight | null {
   let best: SeenLight | null = null;
-  let bestDist = Infinity;
 
   const fire = world.fire;
   const firelit = !fire.dead && fireFrac > 0;
@@ -168,18 +163,26 @@ function brightestVisibleLight(world: WorldState, c: Creature, fireFrac: number)
     // caught in, and a creature must see the light that is actually there.
     // The glow you are standing in is what blurs you. Your own lantern, or the
     // bonfire if you are in its light — whichever is throwing more.
-    let radius = lanternRadius(p.lantern);
-    if (firelit && canSee(world.grid, fire.pos, fire.lightRadiusM, p.pos)) {
-      radius = Math.max(radius, fire.lightRadiusM);
-    }
-
     const d = Math.hypot(p.pos.x - c.pos.x, p.pos.y - c.pos.y);
     // Flat range. Going dark does not shorten it — it only sharpens them up.
-    if (d > CREATURE_CURIOSITY_M || d >= bestDist) continue;
+    if (d > CREATURE_CURIOSITY_M) continue;
     if (!raycastLOS(world.grid, c.pos, p.pos)) continue;
 
-    best = { pos: p.pos, radiusM: radius, dist: d, certain: d <= CREATURE_DARK_SIGHT_M };
-    bestDist = d;
+    // The glow this player is standing in, and where its CENTRE is. Their own
+    // lantern normally; the bonfire when that is throwing more, in which case
+    // the fire is what it fixes on and the player is merely standing near it.
+    let radius = lanternRadius(p.lantern);
+    let at: Vec2 = p.pos;
+    if (
+      firelit &&
+      fire.lightRadiusM > radius &&
+      canSee(world.grid, fire.pos, fire.lightRadiusM, p.pos)
+    ) {
+      radius = fire.lightRadiusM;
+      at = fire.pos;
+    }
+
+    best = brighter(best, { pos: at, radiusM: radius, dist: d, certain: d <= CREATURE_DARK_SIGHT_M });
   }
 
   // Q41: a lantern on the ground keeps drawing them exactly as a held one
@@ -193,77 +196,57 @@ function brightestVisibleLight(world: WorldState, c: Creature, fireFrac: number)
     // A lantern on the ground is still an anomaly worth walking at, and it is
     // still the thing they will fix on rather than you — which is the whole
     // point of putting one down (Q41).
-    if (lanternRadius(dl.lantern) <= 0) continue;
+    const radius = lanternRadius(dl.lantern);
+    if (radius <= 0) continue;
     const d = Math.hypot(dl.pos.x - c.pos.x, dl.pos.y - c.pos.y);
-    if (d > CREATURE_CURIOSITY_M || d >= bestDist) continue;
+    if (d > CREATURE_CURIOSITY_M) continue;
     if (!raycastLOS(world.grid, c.pos, dl.pos)) continue;
 
-    best = {
-      pos: dl.pos,
-      radiusM: lanternRadius(dl.lantern),
-      dist: d,
-      certain: d <= CREATURE_DARK_SIGHT_M,
-    };
-    bestDist = d;
+    best = brighter(best, { pos: dl.pos, radiusM: radius, dist: d, certain: d <= CREATURE_DARK_SIGHT_M });
   }
 
   return best;
 }
 
 /**
- * Where the creature THINKS you are.
+ * Brightest wins; nearest breaks a tie.
  *
- * The single most important function in the creature model. A hunter never
- * receives your position — it receives a point inside whatever glow you are
- * standing in, and commits to that point for a beat before re-estimating.
- *
- * This is what makes light a defence. Dark and it is looking right at you;
- * bright and it is guessing at a spot up to a glow-radius away, which is why
- * you can stand in a roaring camp watching one converge on the wrong side of
- * the bonfire. The price is fuel, and fuel is the only price — which is the
- * whole risk-reward axis.
- *
- * The error still collapses at arm's length, so light is never invulnerability:
- * once something is inside your lit circle it can see you perfectly well.
+ * Brightness rather than proximity is what makes a decoy work at all (Q41): a
+ * lit lantern on the ground outshines a player standing in the dark beside it,
+ * so the lantern is what the creature commits to.
  */
-function perceive(world: WorldState, c: Creature, light: SeenLight): Vec2 {
-  // Inside the lit circle it is looking straight at you. Outside, its idea of
-  // where you are degrades over CREATURE_LIGHT_RESOLVE_M until it knows only
-  // the glow — which is why a wider glow is a worse answer, not a better one.
-  const beyond = Math.max(0, light.dist - light.radiusM);
-  const vagueness = clamp(beyond / CREATURE_LIGHT_RESOLVE_M, 0, 1);
-  let spread = light.radiusM * CREATURE_LIGHT_ERROR_MULT * vagueness;
-
-  // Out in the curiosity band a hint is a hint whatever your lantern is doing.
-  // Without this floor, a player creeping about hooded would be pinpointed from
-  // 120m more sharply than they can manage at 30m.
-  if (!light.certain) spread = Math.max(spread, CREATURE_CURIOSITY_ERROR_M);
-
-  if (spread <= 0) return { x: light.pos.x, y: light.pos.y };
-
-  const r = perceptionRng(world, c);
-  const angle = r() * Math.PI * 2;
-  // sqrt for a uniform scatter over the disc rather than a bias toward the
-  // centre — the guess should be anywhere in the glow, not usually near you.
-  const mag = Math.sqrt(r()) * spread;
-
-  return { x: light.pos.x + Math.cos(angle) * mag, y: light.pos.y + Math.sin(angle) * mag };
+function brighter(a: SeenLight | null, b: SeenLight): SeenLight {
+  if (!a) return b;
+  if (b.radiusM > a.radiusM) return b;
+  if (b.radiusM < a.radiusM) return a;
+  return b.dist < a.dist ? b : a;
 }
 
 /**
- * A PRNG that changes only every CREATURE_PERCEPTION_REFRESH_SEC.
+ * Where the creature aims: the centre of the brightest thing it can see.
  *
- * Re-rolling per tick would make a creature jitter on the spot instead of
- * committing to a guess, walking to it, and finding nothing there — and that
- * arrival-at-the-wrong-place is what feeds Investigate and gives you the window
- * to be somewhere else.
+ * Not you — the *light*. It has no idea where in a glow you are standing, so it
+ * goes for the middle of it, and everything else falls out of that one rule:
+ *
+ *   holding a lantern      you ARE the centre. It comes straight at you.
+ *   standing in firelight  the bonfire is the centre. It charges the fire, and
+ *                          you are off to one side of it — which is why camp is
+ *                          safe, and safest when the fire is biggest.
+ *   lantern set down       the lantern is the centre (Q41). It commits to a
+ *                          decoy and misses you entirely.
+ *   no light at all        nothing to fix on but you, and in the dark it can
+ *                          see you perfectly well.
+ *
+ * There is deliberately no scatter. An earlier pass had it guess a random point
+ * inside the glow, which made a bright lantern *unpredictable* rather than safe
+ * and turned dodging into a coin flip — no skill in it either way. Aiming at
+ * the centre is simpler, it is readable, and it makes the counterplay something
+ * you do rather than something you are dealt.
  */
-function perceptionRng(world: WorldState, c: Creature): () => number {
-  const bucket = Math.floor(world.tick / Math.max(1, Math.round(CREATURE_PERCEPTION_REFRESH_SEC / TICK_DT)));
-  let h = (CREATURE_RNG_SEED ^ bucket) | 0;
-  for (let i = 0; i < c.id.length; i++) h = (Math.imul(h, 31) + c.id.charCodeAt(i)) | 0;
-  return mulberry32(h >>> 0);
+function perceive(light: SeenLight): Vec2 {
+  return { x: light.pos.x, y: light.pos.y };
 }
+
 
 // ---------------------------------------------------------------------------
 // Stage 10 — creatureAct
