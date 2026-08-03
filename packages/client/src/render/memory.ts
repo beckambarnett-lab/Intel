@@ -32,6 +32,14 @@ import type { Renderer } from 'pixi.js';
  *
  * Nothing here is ever consulted about geometry. This module cannot answer
  * "what is at this point" — only "how long ago did you last see it" (Q48).
+ *
+ * The world size is fixed at construction and there is no setter. A shader's
+ * bound resources must not be reassigned after it is built: replacing the
+ * texture a live shader samples throws inside Pixi's bind group, and it throws
+ * on the first frame, which is exactly where a lazily-sized memory field would
+ * do it. The map's dimensions are known before anything needs drawing, so the
+ * caller builds this once with the real bounds and rebuilds it wholesale if
+ * they ever change.
  */
 export class MemoryField {
   /** Screen-space (rot, seen, warp.x, warp.y). The composite's third input. */
@@ -113,17 +121,14 @@ export class MemoryField {
     this.applyWorldSize();
   }
 
-  /** Rebuild for a different map. Wipes memory, which a new map should. */
-  setWorldSize(widthM: number, heightM: number): void {
-    if (widthM === this.widthM && heightM === this.heightM) return;
-    this.widthM = widthM;
-    this.heightM = heightM;
-    this.lastSeenRT.destroy(true);
-    this.lastSeenRT = createLastSeenTexture(widthM, heightM);
-    this.rebindMemory();
-    this.applyWorldSize();
-  }
-
+  /**
+   * Rebuild the screen-space output for a new viewport.
+   *
+   * Safe to destroy and replace because `viewRT` is only ever a render TARGET
+   * here — nothing in this class samples it. The composite does, and the caller
+   * rebuilds that rather than reassigning its bound resource. See the note on
+   * the constructor.
+   */
   resizeScreen(width: number, height: number): void {
     if (width === this.viewRT.width && height === this.viewRT.height) return;
     this.viewRT.destroy(true);
@@ -240,12 +245,6 @@ export class MemoryField {
     this.viewMesh.destroy(true);
     this.lastSeenRT.destroy(true);
     this.viewRT.destroy(true);
-  }
-
-  private rebindMemory(): void {
-    const res = this.viewMesh.shader!.resources;
-    res['uMemory'] = this.lastSeenRT.source;
-    res['uMemorySampler'] = this.lastSeenRT.source.style;
   }
 
   private applyWorldSize(): void {

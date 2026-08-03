@@ -94,15 +94,16 @@ export class Composite {
     this.mesh.shader!.resources['settings'].uniforms.uScreen[1] = height;
   }
 
-  /** Rebind after a resize replaces the underlying textures. */
-  rebind(world: RenderTexture, light: RenderTexture, memory: RenderTexture): void {
-    const res = this.mesh.shader!.resources;
-    res['uWorld'] = world.source;
-    res['uWorldSampler'] = world.source.style;
-    res['uLight'] = light.source;
-    res['uLightSampler'] = light.source.style;
-    res['uMemory'] = memory.source;
-    res['uMemorySampler'] = memory.source.style;
+  /**
+   * There is deliberately no `rebind`.
+   *
+   * Reassigning a bound resource on a live shader throws inside Pixi's bind
+   * group, so a resize destroys this pass and builds a new one against the new
+   * render targets. Resizes are rare and a shader is cheap; a renderer that
+   * crashes on the first frame is not.
+   */
+  destroy(): void {
+    this.mesh.destroy(true);
   }
 
   set exposure(v: number) {

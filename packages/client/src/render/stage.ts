@@ -118,7 +118,7 @@ export class Stage {
    * clearing must not see the same thing in the same place.
    */
   private phantoms = new PhantomField(mulberry32((Math.random() * 0xffffffff) >>> 0));
-  private composite!: Composite;
+  private composite: Composite | null = null;
   /** Map bounds in metres, so drawMap can tell a resize from a redraw. */
   private worldW = 0;
   private worldH = 0;
@@ -145,12 +145,10 @@ export class Stage {
     const { width, height } = this.app.screen;
     this.albedoRT = RenderTexture.create({ width, height, resolution: 1 });
     this.lightRT = RenderTexture.create({ width, height, resolution: 1 });
-    // A one-metre placeholder until drawMap learns the real bounds. The
-    // composite needs a memory texture bound from the first frame, and an empty
-    // one reads as "never seen anything", which is exactly true at that point.
-    this.memory = new MemoryField(1, 1, width, height);
-    this.composite = new Composite(this.albedoRT, this.lightRT, this.memory.viewTexture);
-    this.composite.resize(width, height);
+    // Memory and the composite are NOT built here. Both bind textures sized to
+    // the map, which is not known until the welcome message lands, and a
+    // shader's bound resources cannot be swapped afterwards — attempting it
+    // throws inside Pixi's bind group on the first frame. drawMap builds them.
 
     this.labelStyle = new TextStyle({
       fill: COLOUR.label,
@@ -171,13 +169,13 @@ export class Stage {
 
     // The world and the light field are NOT on the stage. Each is rendered to
     // its own texture and combined by the composite pass, which is the only
-    // thing the stage actually draws.
+    // thing the stage actually draws — it is inserted beneath the bloom by
+    // buildPipeline once the map arrives.
     //
     // The previous renderer used the light field as a mask *and* left it in the
     // display list, so the screen showed the light field itself — a white disc
     // — instead of the lit world underneath it.
-    this.app.stage.addChild(this.composite.mesh);
-
+    //
     // Above the composite and in screen space: the bloom is glow in the air over
     // the treeline, not a lit surface, so it is not subject to line of sight.
     this.app.stage.addChild(this.bloom.container);
@@ -190,6 +188,12 @@ export class Stage {
     const { width, height } = this.app.screen;
     if (width === this.albedoRT.width && height === this.albedoRT.height) return;
 
+    // Order matters throughout: the composite goes first, while the textures it
+    // samples are still alive. Destroying a texture out from under a live
+    // shader and only then tearing the shader down walks Pixi's bind group over
+    // freed resources.
+    this.teardownComposite();
+
     this.albedoRT.destroy(true);
     this.lightRT.destroy(true);
     this.albedoRT = RenderTexture.create({ width, height, resolution: 1 });
@@ -197,12 +201,35 @@ export class Stage {
     // The last-seen texture is world-sized and survives this: resizing the
     // window must not cost you your memory of the wood.
     this.memory?.resizeScreen(width, height);
-    this.composite.rebind(
-      this.albedoRT,
-      this.lightRT,
-      this.memory?.viewTexture ?? this.albedoRT,
-    );
+
+    // Rebuilt, never rebound — see Composite.destroy.
+    this.buildComposite(width, height);
+  }
+
+  private teardownComposite(): void {
+    if (!this.composite) return;
+    this.app.stage.removeChild(this.composite.mesh);
+    this.composite.destroy();
+    this.composite = null;
+  }
+
+  /**
+   * Build the composite against the current render targets.
+   *
+   * Called once when the map arrives and again on every resize. Each call
+   * discards the previous pass entirely: swapping the textures a live shader
+   * samples is what was crashing the renderer on frame one.
+   */
+  private buildComposite(width: number, height: number): void {
+    const memory = this.memory;
+    if (!memory) return;
+
+    this.teardownComposite();
+
+    this.composite = new Composite(this.albedoRT, this.lightRT, memory.viewTexture);
     this.composite.resize(width, height);
+    // Beneath the bloom, which is drawn in screen space on top of everything.
+    this.app.stage.addChildAt(this.composite.mesh, 0);
   }
 
   /**
@@ -225,11 +252,15 @@ export class Stage {
     // drawMap runs again every time a felled tree clears a tile (Q20), so both
     // memory stores are sized rather than rebuilt — losing your map because
     // someone chopped a trunk would be a very strange rule.
-    this.memory?.setWorldSize(widthM, heightM);
-    if (!this.seen || this.worldW !== widthM || this.worldH !== heightM) {
+    if (!this.memory || this.worldW !== widthM || this.worldH !== heightM) {
+      // Composite first — it samples the memory field's view texture.
+      this.teardownComposite();
+      this.memory?.destroy();
+      this.memory = new MemoryField(widthM, heightM, this.app.screen.width, this.app.screen.height);
       this.seen = new SeenField(widthM, heightM);
       this.worldW = widthM;
       this.worldH = heightM;
+      this.buildComposite(this.app.screen.width, this.app.screen.height);
     }
 
     this.ground.clear();
@@ -284,6 +315,11 @@ export class Stage {
     cameraTargetM: { x: number; y: number } | null,
     dtSec: number,
   ): void {
+    // Until the welcome message lands there is no map, no memory field and no
+    // composite — and nothing meaningful to draw.
+    const composite = this.composite;
+    if (!composite) return;
+
     this.elapsed += dtSec;
 
     // Items are drawn inside the masked world container, so wood in the dark
