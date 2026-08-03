@@ -455,7 +455,13 @@ export const CREATURE_RESPAWN_SEC = 300; // Q57 — killed creatures return from
  * of sight or you die.
  */
 export const CREATURE_PATROL_SPEED_MULT = 1.1;
-export const CREATURE_PURSUE_SPEED_MULT = 1.5;
+/**
+ * Sustained pursuit is the stalk, not the kill — the launch is the burst
+ * (CREATURE_LAUNCH_SPEED_MULT). Held just above a walk so it still closes on
+ * you relentlessly, but slowly enough that the charge is the thing that ends
+ * you. Both at 1.5+ was unsurvivable.
+ */
+export const CREATURE_PURSUE_SPEED_MULT = 1.15;
 
 /**
  * Body radius for collision.
@@ -583,6 +589,102 @@ export const CREATURE_PERCEPTION_REFRESH_SEC = 0.6;
 /** Seconds between sniffs while hunting (Q69). */
 export const CREATURE_SNIFF_MIN_SEC = 2;
 export const CREATURE_SNIFF_MAX_SEC = 4;
+
+// ---------------------------------------------------------------------------
+// Creature physics: momentum, stamina and the launch
+//
+// DESIGN ADDITION, not in DESIGN.md. Movement used to set velocity straight at
+// the target every tick — infinite acceleration, instant turning, one speed per
+// state. That made pursuit a tractor beam: the seconds between "it has seen
+// you" and "you are dead" contained no decisions at all.
+//
+// A creature now carries a heading and a speed. It accelerates, it can only
+// turn sharply when slow, and it spends a stamina budget. The payoff is the
+// LAUNCH: a committed charge, aimed once at where it thinks you are and then
+// unsteerable. Sidestep late and it goes past.
+// ---------------------------------------------------------------------------
+
+/** Metres per second squared. Braking beats accelerating, as mass does. */
+export const CREATURE_ACCEL_MPS2 = 9;
+export const CREATURE_BRAKE_MPS2 = 14;
+
+/**
+ * Degrees per second it can turn, at a standstill and at full launch speed.
+ *
+ * The gap between these two numbers is the dodge. At 35 deg/s a launched
+ * creature needs about five seconds to reverse, which it does not have — so it
+ * commits, overshoots, and has to shed speed and set up again.
+ */
+export const CREATURE_TURN_RATE_MAX_DPS = 360;
+export const CREATURE_TURN_RATE_MIN_DPS = 35;
+
+/** Launch speed, as a multiple of an unloaded player's walk. Nothing outruns it. */
+export const CREATURE_LAUNCH_SPEED_MULT = 2.6;
+
+/**
+ * The window a launch may commit from, in metres.
+ *
+ * The lower bound MUST stay above LANTERN_STAGES.full.radiusM. `perceive()`
+ * hands back an exact position once a creature is inside your lit circle, so a
+ * launch committing from 8m would be pinpoint however bright you were and the
+ * whole point of this system would evaporate. Committing from outside the pool
+ * means the aiming error is always real when it matters — and it makes "never
+ * let one inside ten metres" a clean rule to learn.
+ */
+export const CREATURE_LAUNCH_MIN_RANGE_M = 12;
+export const CREATURE_LAUNCH_MAX_RANGE_M = 25;
+
+/**
+ * The telegraph, in seconds. It rears, then it commits.
+ *
+ * Fixed, NOT scaled by how much light it is looking into. The warning a bright
+ * lantern buys you is that you SEE IT COMING — your light reaches further, so
+ * you watch it stalk in from nine metres instead of noticing it at one. The
+ * creature is not shyer; you are simply less blind. Making the beast hesitate
+ * would have put the same effect in the wrong place, where the player cannot
+ * see the cause.
+ *
+ * Long enough to survive 100ms of interpolation plus latency and still be
+ * reactable, short enough that it is a jump scare rather than a countdown.
+ */
+export const CREATURE_LAUNCH_WIND_SEC = 0.4;
+
+/** How long a committed charge runs before it gives up and decelerates. */
+export const CREATURE_LAUNCH_MAX_SEC = 1.4;
+
+/**
+ * Fraction of launch speed it reaches instantly on committing.
+ *
+ * A pounce is a burst, not a car pulling away. Without this the creature brakes
+ * to nothing to aim and then has to accelerate at CREATURE_ACCEL_MPS2 for over
+ * two seconds to hit full speed — longer than the charge lasts — so it topped
+ * out at a jog and simply walked into you. The wind-up is the tell; the leap
+ * off the end of it has to actually be a leap.
+ */
+export const CREATURE_LAUNCH_BURST_FRAC = 0.85;
+
+/** Enforced pause between charges, on top of the stamina cost. */
+export const CREATURE_LAUNCH_COOLDOWN_SEC = 2.5;
+
+/** Fraction of its speed a charge loses on hitting geometry. */
+export const CREATURE_LAUNCH_WALL_SPEED_LOSS = 0.75;
+
+/**
+ * Stamina, in seconds of hard running.
+ *
+ * Without it "much faster than you" just means you never escape. With it the
+ * hunt has a rhythm — stalk, commit, recover — and the recovery is your window.
+ */
+export const CREATURE_STAMINA_MAX_SEC = 6;
+export const CREATURE_STAMINA_LAUNCH_COST = 2.5;
+export const CREATURE_STAMINA_DRAIN_PER_SEC = 1;
+export const CREATURE_STAMINA_RECOVER_PER_SEC = 0.5;
+
+/** Speed above which stamina drains rather than recovers, as a walk multiple. */
+export const CREATURE_STAMINA_FREE_SPEED_MULT = 1.1;
+
+/** Roar on the wind-up (Q69's growl, doing a job). Loud — it is the warning. */
+export const SOUND_RADIUS_ROAR_M = 35;
 
 /**
  * Hits before it turns Desperate (Q70: 3–4 is frenzied).

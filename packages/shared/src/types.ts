@@ -432,7 +432,7 @@ export function createFire(): Fire {
 // Sound (§9, Q58) — see sim/sound.ts
 // ---------------------------------------------------------------------------
 
-export type SoundKind = 'footfall' | 'chop' | 'scatter' | 'sniff' | 'growl';
+export type SoundKind = 'footfall' | 'chop' | 'scatter' | 'sniff' | 'growl' | 'roar';
 
 /**
  * One noise, alive for one tick.
@@ -468,7 +468,17 @@ export type CreatureState =
   | 'siege'
   | 'sabotage'
   | 'desperate'
-  | 'return';
+  | 'return'
+  /**
+   * Rearing to charge. The telegraph, and the only warning you get — it roars,
+   * and it hangs there longer the more light it is squinting into.
+   */
+  | 'wind'
+  /**
+   * Committed. Heading was frozen when it launched and it cannot steer; all it
+   * can do is run out the charge. This is the thing you dodge.
+   */
+  | 'launch';
 
 /**
  * An order from whoever is commanding (L17).
@@ -495,7 +505,28 @@ export interface CreatureOrder {
 export interface Creature {
   id: string;
   pos: Vec2;
+  /**
+   * Derived from heading and speed each tick, never assigned directly.
+   *
+   * Kept because everything downstream — footfall loudness, the client, the
+   * tests — already reads a velocity, and because "what it is actually doing"
+   * is a different question from "what it is trying to do".
+   */
   vel: Vec2;
+  /** Facing, radians. Turns at a rate that collapses as it speeds up. */
+  heading: number;
+  /** Current speed along `heading`, m/s. Accelerates, never teleports. */
+  speed: number;
+  /**
+   * Seconds of hard running left. Drains above a walk, recovers below it, and
+   * a charge costs a fixed chunk — so it cannot simply chain them at you.
+   */
+  staminaSec: number;
+  /** Seconds left of the current wind-up, or of the current charge. */
+  windSec: number;
+  launchSec: number;
+  /** Enforced pause before it may charge again. */
+  launchCooldownSec: number;
   state: CreatureState;
   /** Where it is currently heading, in world metres. */
   target: Vec2 | null;

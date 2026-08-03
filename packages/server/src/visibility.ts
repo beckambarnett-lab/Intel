@@ -1,9 +1,11 @@
 import {
+  CREATURE_LAUNCH_MAX_RANGE_M,
   LIT_FIGURE_VISIBLE_M,
   VISIBILITY_HYSTERESIS_MS,
   canSee,
   lanternRadius,
   lanternSeenAt,
+  raycastLOS,
 } from '@ember/shared';
 import type {
   CreatureView,
@@ -223,7 +225,29 @@ export class VisibilityIndex {
       if (!c || !c.alive) continue;
 
       const key = `${viewerId}|creature:${id}`;
+
+      // A creature rearing to charge, or already committed to one, is sent
+      // inside its launch range even though your lantern does not reach it.
+      //
+      // This is a deliberate, narrow exception to Q122 and worth stating
+      // plainly. It is not "see in the dark": the thing has stopped, reared,
+      // roared, and is about to cover twenty metres in a second. A player would
+      // perceive that, and without it the dodge is a mechanic you can never
+      // react to — which makes it random death rather than a fight.
+      //
+      // It stays honest in practice because the renderer still decides what you
+      // actually SEE. On ground you remember it comes through at memory
+      // brightness, dim and warped and easily mistaken for a phantom; on ground
+      // you have never lit it stays black. Nothing is revealed that the darkness
+      // was hiding, only that something enormous has announced itself.
+      const charging = c.state === 'wind' || c.state === 'launch';
+      const announced =
+        charging &&
+        Math.hypot(c.pos.x - viewer.pos.x, c.pos.y - viewer.pos.y) <= CREATURE_LAUNCH_MAX_RANGE_M &&
+        raycastLOS(world.grid, viewer.pos, c.pos);
+
       const lit =
+        announced ||
         canSee(world.grid, viewer.pos, lantern, c.pos) ||
         (canSee(world.grid, fire.pos, fire.lightRadiusM, c.pos) &&
           canSee(world.grid, viewer.pos, LIT_FIGURE_VISIBLE_M, c.pos));

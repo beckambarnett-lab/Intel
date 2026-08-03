@@ -1,6 +1,24 @@
 import {
+  CREATURE_ACCEL_MPS2,
   CREATURE_ARRIVE_M,
+  CREATURE_BRAKE_MPS2,
   CREATURE_CONTACT_M,
+  CREATURE_LAUNCH_BURST_FRAC,
+  CREATURE_LAUNCH_COOLDOWN_SEC,
+  CREATURE_LAUNCH_MAX_RANGE_M,
+  CREATURE_LAUNCH_MAX_SEC,
+  CREATURE_LAUNCH_MIN_RANGE_M,
+  CREATURE_LAUNCH_SPEED_MULT,
+  CREATURE_LAUNCH_WALL_SPEED_LOSS,
+  CREATURE_LAUNCH_WIND_SEC,
+  CREATURE_STAMINA_DRAIN_PER_SEC,
+  CREATURE_STAMINA_FREE_SPEED_MULT,
+  CREATURE_STAMINA_LAUNCH_COST,
+  CREATURE_STAMINA_MAX_SEC,
+  CREATURE_STAMINA_RECOVER_PER_SEC,
+  CREATURE_TURN_RATE_MAX_DPS,
+  CREATURE_TURN_RATE_MIN_DPS,
+  SOUND_RADIUS_ROAR_M,
   CREATURE_DESPERATE_HITS,
   CREATURE_DESPERATE_NOISE_MULT,
   CREATURE_DESPERATE_SPEED_MULT,
@@ -37,7 +55,7 @@ import type { ZoneName } from '../constants.js';
 import { isBlockedAt } from '../grid.js';
 import { canSee, raycastLOS } from '../los.js';
 import { TICK_DT } from '../constants.js';
-import { clamp, mulberry32 } from '../math.js';
+import { clamp, lerp, mulberry32 } from '../math.js';
 import type { Vec2 } from '../math.js';
 import { fuelFraction } from './fire.js';
 import { spawnItem } from './items.js';
@@ -298,8 +316,26 @@ function decideState(world: WorldState, c: Creature, perimeterHolds: boolean): C
   // Seeing you beats everything else it could be doing. A *hint* of you does
   // not — that is a curiosity, and it drifts over at walking pace to look
   // rather than committing to a chase.
+  // A charge in progress runs to completion. It committed; it cannot change
+  // its mind, and that is the whole reason a sidestep works.
+  if (c.launchSec > 0) return 'launch';
+  if (c.windSec > 0) return 'wind';
+
   const fresh = c.lightMemorySec >= CREATURE_LIGHT_MEMORY_SEC - 1e-6 && c.lastLight;
-  if (fresh) return c.certain ? 'pursue' : 'investigate';
+  if (fresh && c.certain) {
+    // Close enough to commit, with the legs to do it? Rear up.
+    const d = distanceTo(c, c.lastLight!);
+    if (
+      d >= CREATURE_LAUNCH_MIN_RANGE_M &&
+      d <= CREATURE_LAUNCH_MAX_RANGE_M &&
+      c.launchCooldownSec <= 0 &&
+      c.staminaSec >= CREATURE_STAMINA_LAUNCH_COST
+    ) {
+      return 'wind';
+    }
+    return 'pursue';
+  }
+  if (fresh) return 'investigate';
 
   // The light went out but it has not forgotten yet.
   if (c.lightMemorySec > 0 && c.lastLight) return 'investigate';
@@ -334,6 +370,9 @@ function decideState(world: WorldState, c: Creature, perimeterHolds: boolean): C
 function act(world: WorldState, c: Creature, dt: number, perimeterHolds: boolean): void {
   let speedMult = CREATURE_PATROL_SPEED_MULT;
   let noiseMult = 1;
+  let launching = false;
+
+  c.launchCooldownSec = Math.max(0, c.launchCooldownSec - dt);
 
   switch (c.state) {
     case 'desperate': {
@@ -348,6 +387,43 @@ function act(world: WorldState, c: Creature, dt: number, perimeterHolds: boolean
     case 'pursue': {
       speedMult = CREATURE_PURSUE_SPEED_MULT;
       c.target = c.lastLight;
+      break;
+    }
+
+    case 'wind': {
+      // Rearing. It brakes to nothing, which is what lets it aim, and holds
+      // there for longer the more light it is squinting into.
+      if (c.windSec <= 0) {
+        c.windSec = CREATURE_LAUNCH_WIND_SEC;
+        emit(world, c.pos, SOUND_RADIUS_ROAR_M, 'roar');
+      }
+      c.windSec = Math.max(0, c.windSec - dt);
+      c.target = c.lastLight;
+      speedMult = 0;
+
+      if (c.windSec <= 0) {
+        // Commit. The heading freezes HERE, aimed at where it believes you are
+        // right now — error and all — and nothing after this point can correct
+        // it. Bright lantern, bad guess, wasted charge.
+        const aim = c.lastLight ?? c.pos;
+        c.heading = Math.atan2(aim.y - c.pos.y, aim.x - c.pos.x);
+        c.launchSec = CREATURE_LAUNCH_MAX_SEC;
+        // The leap itself. It does not accelerate into a charge from a
+        // standstill — it explodes out of the crouch it just aimed from.
+        c.speed = PLAYER_WALK_SPEED * CREATURE_LAUNCH_SPEED_MULT * CREATURE_LAUNCH_BURST_FRAC;
+        c.staminaSec = Math.max(0, c.staminaSec - CREATURE_STAMINA_LAUNCH_COST);
+        c.launchCooldownSec = CREATURE_LAUNCH_COOLDOWN_SEC;
+      }
+      break;
+    }
+
+    case 'launch': {
+      c.launchSec = Math.max(0, c.launchSec - dt);
+      speedMult = CREATURE_LAUNCH_SPEED_MULT;
+      noiseMult = CREATURE_DESPERATE_NOISE_MULT;
+      // No target and no steering — move() is told not to turn at all.
+      c.target = null;
+      launching = true;
       break;
     }
 
@@ -421,7 +497,8 @@ function act(world: WorldState, c: Creature, dt: number, perimeterHolds: boolean
     }
   }
 
-  move(world, c, dt, speedMult, perimeterHolds);
+  move(world, c, dt, speedMult, perimeterHolds, { steer: !launching });
+  spendStamina(c, dt);
 
   // A moving creature makes noise like anything else does. Q69 gives it
   // footfalls; the multiplier is what makes a desperate one audible from a
@@ -441,47 +518,132 @@ function sniff(world: WorldState, c: Creature, dt: number): void {
 }
 
 /**
- * Steer at the target and collide against the TRUE occluder grid (Q48).
+ * Momentum. Turn toward the target, accelerate toward the wanted speed, move.
  *
- * Axes resolve separately so a creature running at a trunk slides along it
- * rather than sticking — the same treatment players get, for the same reason.
+ * The two rules that matter: it cannot change speed instantly, and it cannot
+ * turn sharply while fast. `turnRateAt` collapses from 360 deg/s at rest to 35
+ * at full charge, which is what makes a committed launch unsteerable and a
+ * sidestep a real answer to it.
+ *
+ * Collision still reads the TRUE occluder grid (Q48) and still resolves axes
+ * separately, so a creature sliding along rock behaves as before — except that
+ * a charge into geometry now costs it most of its speed, which is the wood
+ * quietly working as cover.
  */
 function move(
   world: WorldState,
   c: Creature,
   dt: number,
-  speedMult: number,
+  wantSpeedMult: number,
   perimeterHolds: boolean,
+  opts: { steer: boolean } = { steer: true },
 ): void {
-  const target = c.target;
-  if (!target) {
-    c.vel.x = 0;
-    c.vel.y = 0;
-    return;
+  let wantSpeed = PLAYER_WALK_SPEED * wantSpeedMult;
+
+  // A launch is committed: it keeps the heading it froze at and cannot steer.
+  if (opts.steer) {
+    const target = c.target;
+    if (target) {
+      const dist = Math.hypot(target.x - c.pos.x, target.y - c.pos.y);
+
+      // Arrived. Brake rather than walking through it — without this a creature
+      // sails past the woodpile it came to wreck and orbits forever, because
+      // nothing else in the loop tells it to stop.
+      if (dist <= CREATURE_ARRIVE_M) {
+        wantSpeed = 0;
+      } else {
+        const desired = Math.atan2(target.y - c.pos.y, target.x - c.pos.x);
+        const maxTurn = ((turnRateAt(c.speed) * Math.PI) / 180) * dt;
+        c.heading = turnToward(c.heading, desired, maxTurn);
+      }
+    } else {
+      // Nothing to head for. Coast to a stop rather than drifting on the last
+      // heading it happened to have.
+      wantSpeed = 0;
+    }
   }
 
-  const dx = target.x - c.pos.x;
-  const dy = target.y - c.pos.y;
-  const dist = Math.hypot(dx, dy);
-  if (dist < 1e-4) {
-    c.vel.x = 0;
-    c.vel.y = 0;
-    return;
+  // Out of puff. A spent creature cannot keep running you down — it drops to a
+  // trudge until it has recovered, and that trudge is the distance you get
+  // back. Without this, stamina only ever gated the charge and "it has to
+  // conserve" was not true of anything you could see.
+  if (c.staminaSec <= 0) {
+    wantSpeed = Math.min(wantSpeed, PLAYER_WALK_SPEED * CREATURE_STAMINA_FREE_SPEED_MULT);
   }
 
-  const speed = PLAYER_WALK_SPEED * speedMult;
-  c.vel.x = (dx / dist) * speed;
-  c.vel.y = (dy / dist) * speed;
+  // Accelerate or brake toward what this state wants.
+  const rate = wantSpeed > c.speed ? CREATURE_ACCEL_MPS2 : CREATURE_BRAKE_MPS2;
+  const delta = clamp(wantSpeed - c.speed, -rate * dt, rate * dt);
+  c.speed = Math.max(0, c.speed + delta);
+
+  c.vel.x = Math.cos(c.heading) * c.speed;
+  c.vel.y = Math.sin(c.heading) * c.speed;
+
+  if (c.speed <= 0) return;
 
   const wantX = clamp(c.pos.x + c.vel.x * dt, CREATURE_RADIUS, world.bounds.w - CREATURE_RADIUS);
   const wantY = clamp(c.pos.y + c.vel.y * dt, CREATURE_RADIUS, world.bounds.h - CREATURE_RADIUS);
 
+  let hit = false;
   if (!blocked(world, wantX, c.pos.y) && allowed(world, wantX, c.pos.y, perimeterHolds)) {
     c.pos.x = wantX;
+  } else {
+    hit = true;
   }
   if (!blocked(world, c.pos.x, wantY) && allowed(world, c.pos.x, wantY, perimeterHolds)) {
     c.pos.y = wantY;
+  } else {
+    hit = true;
   }
+
+  // Running into something at speed costs the charge. A trunk is not a wall you
+  // scrape along at 18 m/s.
+  if (hit && c.state === 'launch') {
+    c.speed *= 1 - CREATURE_LAUNCH_WALL_SPEED_LOSS;
+    c.launchSec = 0;
+  }
+}
+
+/**
+ * Stamina: drains above a walk, recovers below it.
+ *
+ * This is what stops "much faster than you" collapsing into "you never get
+ * away". A creature that has been running has to ease off, and easing off is
+ * the only breathing room the hunt gives you — so the fight has a rhythm rather
+ * than a single unbroken line.
+ */
+function spendStamina(c: Creature, dt: number): void {
+  const free = PLAYER_WALK_SPEED * CREATURE_STAMINA_FREE_SPEED_MULT;
+
+  if (c.speed > free) {
+    c.staminaSec = Math.max(0, c.staminaSec - CREATURE_STAMINA_DRAIN_PER_SEC * dt);
+  } else {
+    c.staminaSec = Math.min(
+      CREATURE_STAMINA_MAX_SEC,
+      c.staminaSec + CREATURE_STAMINA_RECOVER_PER_SEC * dt,
+    );
+  }
+}
+
+/**
+ * Degrees per second it can turn at this speed.
+ *
+ * Full agility at a standstill, collapsing toward CREATURE_TURN_RATE_MIN_DPS at
+ * launch speed. This single curve is the whole dodge mechanic: a creature that
+ * wants to follow you has to slow down first, and slowing down is the window.
+ */
+export function turnRateAt(speedMps: number): number {
+  const top = PLAYER_WALK_SPEED * CREATURE_LAUNCH_SPEED_MULT;
+  const t = clamp(speedMps / Math.max(top, 1e-6), 0, 1);
+  return lerp(CREATURE_TURN_RATE_MAX_DPS, CREATURE_TURN_RATE_MIN_DPS, t);
+}
+
+/** Rotate `from` toward `to` by at most `maxTurn` radians, the short way. */
+function turnToward(from: number, to: number, maxTurn: number): number {
+  let diff = (to - from) % (Math.PI * 2);
+  if (diff > Math.PI) diff -= Math.PI * 2;
+  if (diff < -Math.PI) diff += Math.PI * 2;
+  return from + clamp(diff, -maxTurn, maxTurn);
 }
 
 /**
@@ -683,6 +845,12 @@ export function createCreature(id: string, pos: Vec2, zone: ZoneName): Creature 
     id,
     pos: { ...pos },
     vel: { x: 0, y: 0 },
+    heading: 0,
+    speed: 0,
+    staminaSec: CREATURE_STAMINA_MAX_SEC,
+    windSec: 0,
+    launchSec: 0,
+    launchCooldownSec: 0,
     state: 'patrol',
     target: null,
     lastLight: null,
@@ -715,6 +883,11 @@ function revive(world: WorldState, c: Creature): void {
   c.hits = 0;
   c.state = 'patrol';
   c.target = null;
+  c.speed = 0;
+  c.staminaSec = CREATURE_STAMINA_MAX_SEC;
+  c.windSec = 0;
+  c.launchSec = 0;
+  c.launchCooldownSec = 0;
   c.lastLight = null;
   c.lastSound = null;
   c.certain = false;

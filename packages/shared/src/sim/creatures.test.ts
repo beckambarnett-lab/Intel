@@ -10,6 +10,17 @@ import {
   FIRE_CAPACITY,
   CREATURE_CURIOSITY_ERROR_M,
   CREATURE_CURIOSITY_M,
+  CREATURE_LAUNCH_MIN_RANGE_M,
+  CREATURE_LAUNCH_SPEED_MULT,
+  CREATURE_LAUNCH_WIND_SEC,
+  CREATURE_STAMINA_FREE_SPEED_MULT,
+  CREATURE_STAMINA_LAUNCH_COST,
+  CREATURE_TURN_RATE_MAX_DPS,
+  CREATURE_TURN_RATE_MIN_DPS,
+  INTERP_DELAY_MS,
+  LANTERN_STAGES,
+  PLAYER_SPRINT_MULT,
+  PLAYER_WALK_SPEED,
   CREATURE_DARK_SIGHT_M,
   CREATURE_SIEGE_RANGE_M,
   OCCLUDER_OPAQUE,
@@ -24,6 +35,7 @@ import {
   creatureSense,
   fireBeaconRangeM,
   killCreature,
+  turnRateAt,
 } from './creatures.js';
 import { refreshFire } from './fire.js';
 import { emitSounds } from './sound.js';
@@ -199,14 +211,15 @@ describe('the priority switch (Q60)', () => {
   });
 
   it('drops to investigate when you break the line, then gives up', () => {
-    const { world, player, c } = scene({ creatureAt: { x: 175, y: 30 } });
+    // Beyond CREATURE_LAUNCH_MAX_RANGE_M, so it stalks rather than rearing up.
+    const { world, player, c } = scene({ creatureAt: { x: 190, y: 30 } });
     player.lantern.stage = 'full';
     player.lantern.target = 'full';
     run(world, 0.5);
     expect(c.state).toBe('pursue');
 
     // Put rock between you and hold absolutely still: no sight, no sound.
-    for (let ty = 0; ty < 60; ty++) setTile(world.grid, 165, ty, OCCLUDER_OPAQUE);
+    for (let ty = 0; ty < 60; ty++) setTile(world.grid, 180, ty, OCCLUDER_OPAQUE);
     player.vel = { x: 0, y: 0 };
 
     run(world, 1);
@@ -272,13 +285,16 @@ describe('speeds (Q61)', () => {
     patrolling.world.fire.fuel = 0;
     patrolling.world.fire.dead = true;
     refreshFire(patrolling.world.fire);
-    run(patrolling.world, 2);
+    // Long enough to reach terminal speed — creatures accelerate now.
+    run(patrolling.world, 3);
     const patrolSpeed = Math.hypot(patrolling.c.vel.x, patrolling.c.vel.y);
 
-    const pursuing = scene({ creatureAt: { x: 175, y: 30 } });
+    // Far enough out that three seconds of closing still leaves it beyond
+    // launch range, so it is genuinely pursuing rather than rearing to charge.
+    const pursuing = scene({ creatureAt: { x: 205, y: 30 } });
     pursuing.player.lantern.stage = 'full';
     pursuing.player.lantern.target = 'full';
-    run(pursuing.world, 0.5);
+    run(pursuing.world, 3);
     const pursueSpeed = Math.hypot(pursuing.c.vel.x, pursuing.c.vel.y);
 
     expect(pursueSpeed).toBeGreaterThan(patrolSpeed);
@@ -366,7 +382,7 @@ describe('sabotage (Q24)', () => {
     world.creatures['c1'] = createCreature('c1', { x: 30, y: 30 }, 'camp');
 
     const before = world.woodpile.contents.log;
-    run(world, CREATURE_SABOTAGE_SEC + 0.5);
+    run(world, CREATURE_SABOTAGE_SEC + 3);
 
     expect(world.woodpile.contents.log).toBeLessThan(before);
     // The wood still exists — it is out there, and going to get it is the cost.
@@ -383,7 +399,7 @@ describe('sabotage (Q24)', () => {
     world.woodpile.contents.log = 4;
     world.creatures['c1'] = createCreature('c1', { x: 30, y: 30 }, 'camp');
 
-    run(world, CREATURE_SABOTAGE_SEC + 0.5);
+    run(world, CREATURE_SABOTAGE_SEC + 3);
 
     for (const item of Object.values(world.items)) {
       const d = Math.hypot(item.pos.x - world.fire.pos.x, item.pos.y - world.fire.pos.y);
@@ -740,12 +756,15 @@ describe('curiosity (the band between noticing and knowing)', () => {
   });
 
   it('drifts at walking pace, not pursuit pace', () => {
-    const curious = atRange((CREATURE_DARK_SIGHT_M + CREATURE_CURIOSITY_M) / 2);
-    run(curious.world, 1);
+    // Both run to terminal speed: creatures accelerate now, so sampling at
+    // different moments would measure the ramp rather than the intent.
+    const curious = atRange(90);
+    run(curious.world, 3);
     const drift = Math.hypot(curious.c.vel.x, curious.c.vel.y);
 
-    const chasing = atRange(CREATURE_DARK_SIGHT_M / 2);
-    run(chasing.world, 0.5);
+    // Far enough that it is still stalking at the sample, not rearing up.
+    const chasing = atRange(55);
+    run(chasing.world, 3);
     const charge = Math.hypot(chasing.c.vel.x, chasing.c.vel.y);
 
     expect(drift).toBeLessThan(charge);
@@ -784,5 +803,191 @@ describe('curiosity (the band between noticing and knowing)', () => {
     expect(s.c.certain).toBe(true);
     expect(s.c.state).toBe('pursue');
     expect(s.player.alive).toBe(true);
+  });
+});
+
+/**
+ * Momentum, stamina and the launch.
+ *
+ * Movement used to be a tractor beam — velocity set straight at the target
+ * every tick, so the seconds before contact held no decisions. These are the
+ * assertions that keep the dodge real.
+ */
+describe('the launch', () => {
+  /** A creature and a player in the open, with no fire to complicate matters. */
+  function duel(stage: 'hooded' | 'low' | 'full', gapM: number) {
+    const world = createWorld(400, 200);
+    world.fire.pos = { x: 5, y: 5 };
+    world.fire.fuel = 0;
+    world.fire.dead = true;
+    refreshFire(world.fire);
+
+    const player = createPlayer('p1', 'p1', { x: 200, y: 100 });
+    world.players['p1'] = player;
+    player.lantern.stage = stage;
+    player.lantern.target = stage;
+
+    const c = createCreature('c1', { x: 200 + gapM, y: 100 }, 'nearWood');
+    world.creatures['c1'] = c;
+    return { world, player, c };
+  }
+
+  it('telegraphs for long enough to survive latency and still be reactable', () => {
+    // Fixed, not scaled by light. The warning a bright lantern buys you is that
+    // you see it stalking in from nine metres instead of noticing it at one —
+    // it is not shyer, you are less blind.
+    expect(CREATURE_LAUNCH_WIND_SEC).toBeGreaterThan(INTERP_DELAY_MS / 1000 * 2);
+    expect(CREATURE_LAUNCH_WIND_SEC).toBeLessThan(1);
+  });
+
+  it('never commits from inside a full lantern’s pool', () => {
+    // The load-bearing constraint. perceive() is exact once a creature is
+    // inside your glow, so a charge starting there would be pinpoint however
+    // bright you were and light would stop mattering exactly when it counts.
+    expect(CREATURE_LAUNCH_MIN_RANGE_M).toBeGreaterThan(LANTERN_STAGES.full.radiusM);
+  });
+
+  it('rears before it charges, and roars doing it', () => {
+    const { world, c } = duel('hooded', 20);
+    // One tick: the roar fires as the wind-up begins, and sounds live for
+    // exactly one tick, so a longer run would clear it.
+    run(world, TICK_DT);
+
+    expect(c.state).toBe('wind');
+    expect(world.sounds.some((s) => s.kind === 'roar')).toBe(true);
+  });
+
+  it('brakes to aim, then goes far faster than any player', () => {
+    const { world, c } = duel('hooded', 20);
+    run(world, 0.5);
+    expect(c.state).toBe('launch');
+
+    // Sampled mid-charge: it decelerates once the charge times out, and it may
+    // reach the player before that.
+    run(world, 0.4);
+    expect(c.speed).toBeGreaterThan(PLAYER_WALK_SPEED * PLAYER_SPRINT_MULT);
+  });
+
+  it('cannot turn to follow a sidestep once committed', () => {
+    const { world, player, c } = duel('hooded', 20);
+    run(world, 0.5);
+    expect(c.state).toBe('launch');
+
+    const headingAtCommit = c.heading;
+    // Player bolts perpendicular for the length of the charge.
+    for (let i = 0; i < Math.round(1 / TICK_DT); i++) {
+      player.pos.y += PLAYER_WALK_SPEED * TICK_DT;
+      emitSounds(world);
+      creatureSense(world, TICK_DT);
+      creatureAct(world, TICK_DT);
+      world.tick++;
+    }
+
+    // Barely deflected — a committed charge is a straight line.
+    const turned = Math.abs(c.heading - headingAtCommit);
+    expect(turned).toBeLessThan(0.15);
+  });
+
+  it('turns freely when slow and hardly at all when fast', () => {
+    expect(turnRateAt(0)).toBeCloseTo(CREATURE_TURN_RATE_MAX_DPS, 5);
+    expect(turnRateAt(PLAYER_WALK_SPEED * CREATURE_LAUNCH_SPEED_MULT)).toBeCloseTo(
+      CREATURE_TURN_RATE_MIN_DPS,
+      5,
+    );
+    expect(turnRateAt(PLAYER_WALK_SPEED)).toBeLessThan(CREATURE_TURN_RATE_MAX_DPS);
+  });
+
+  it('a dodge on the commit is the difference between living and dying', () => {
+    const still = duel('hooded', 20);
+    run(still.world, 5);
+    expect(still.player.alive).toBe(false);
+
+    const dodging = duel('hooded', 20);
+    let dodged = false;
+    for (let i = 0; i < Math.round(5 / TICK_DT); i++) {
+      if (dodging.c.state === 'launch') dodged = true;
+      if (dodged) dodging.player.pos.y += PLAYER_WALK_SPEED * TICK_DT;
+      emitSounds(dodging.world);
+      creatureSense(dodging.world, TICK_DT);
+      creatureAct(dodging.world, TICK_DT);
+      dodging.world.tick++;
+    }
+    expect(dodging.player.alive).toBe(true);
+  });
+
+  it('misses more often against a bright lantern than a hooded one', () => {
+    // Averaged over many seeds. The aiming error is a uniform disc, so a single
+    // draw is often mostly radial — harmless to a charge running straight
+    // through you — and proves nothing either way.
+    const missRate = (stage: 'hooded' | 'full'): number => {
+      let missed = 0;
+      const trials = 60;
+
+      for (let t = 0; t < trials; t++) {
+        const { world, player, c } = duel(stage, 20);
+        world.tick = t * 37;
+
+        let launched = false;
+        for (let i = 0; i < Math.round(4 / TICK_DT); i++) {
+          if (c.state === 'launch') launched = true;
+          emitSounds(world);
+          creatureSense(world, TICK_DT);
+          creatureAct(world, TICK_DT);
+          world.tick++;
+          if (!player.alive) break;
+        }
+
+        if (launched && player.alive) missed++;
+      }
+
+      return missed / trials;
+    };
+
+    // A nine-metre glow leaves it guessing; a hooded lantern does not.
+    expect(missRate('full')).toBeGreaterThan(missRate('hooded'));
+  });
+
+  it('spends stamina to charge and cannot chain them', () => {
+    const { world, c } = duel('hooded', 20);
+    const before = c.staminaSec;
+    run(world, 0.5);
+
+    expect(c.staminaSec).toBeLessThan(before - CREATURE_STAMINA_LAUNCH_COST + 0.5);
+    expect(c.launchCooldownSec).toBeGreaterThan(0);
+  });
+
+  it('drops to a trudge once it is spent', () => {
+    const { world, c } = duel('hooded', 20);
+    c.staminaSec = 0;
+    run(world, 3);
+
+    // Exhausted, it cannot keep running you down — that trudge is your distance
+    // back, and without it stamina would gate nothing you could see.
+    expect(c.speed).toBeLessThanOrEqual(
+      PLAYER_WALK_SPEED * CREATURE_STAMINA_FREE_SPEED_MULT + 1e-6,
+    );
+  });
+
+  it('recovers when it eases off', () => {
+    const { world, c } = duel('hooded', 20);
+    c.staminaSec = 0;
+    c.lastLight = null;
+    c.lightMemorySec = 0;
+    c.certain = false;
+    c.speed = 0;
+    run(world, 4);
+
+    expect(c.staminaSec).toBeGreaterThan(0);
+  });
+
+  it('is still deterministic', () => {
+    const a = duel('full', 20);
+    const b = duel('full', 20);
+    run(a.world, 6);
+    run(b.world, 6);
+
+    expect(a.c.pos.x).toBe(b.c.pos.x);
+    expect(a.c.pos.y).toBe(b.c.pos.y);
+    expect(a.c.speed).toBe(b.c.speed);
   });
 });
