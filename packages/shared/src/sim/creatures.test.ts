@@ -8,7 +8,7 @@ import {
   CREATURE_SABOTAGE_SEC,
   CREATURE_SOUND_MEMORY_SEC,
   FIRE_CAPACITY,
-  LANTERN_STAGES,
+  CREATURE_DARK_SIGHT_M,
   OCCLUDER_OPAQUE,
   TICK_DT,
 } from '../constants.js';
@@ -49,27 +49,39 @@ function run(world: WorldState, seconds: number): void {
   }
 }
 
-describe('sensing light (Q37/Q59, L12)', () => {
-  it('sees a full lantern from well outside a low one’s range', () => {
+describe('sight is flat and darkness does not hide you', () => {
+  it('sees you at 30m with a full lantern', () => {
     const { world, player, c } = scene({ creatureAt: { x: 150 + 30, y: 30 } });
     player.lantern.stage = 'full';
     player.lantern.target = 'full';
-    expect(30).toBeLessThan(LANTERN_STAGES.full.seenAtM);
 
     creatureSense(world, TICK_DT);
     expect(c.lastLight).not.toBeNull();
   });
 
-  it('does not see a hooded lantern from 30m — the stage is the range', () => {
+  it('sees you at 30m hooded too — they see in the dark', () => {
     const { world, player, c } = scene({ creatureAt: { x: 150 + 30, y: 30 } });
     player.lantern.stage = 'hooded';
     player.lantern.target = 'hooded';
 
     creatureSense(world, TICK_DT);
-    expect(c.lastLight).toBeNull();
+    expect(c.lastLight).not.toBeNull();
   });
 
-  it('does not see through rock, however bright the lantern', () => {
+  it('loses you past its sight range whatever your lantern is doing', () => {
+    for (const stage of ['hooded', 'full'] as const) {
+      const { world, player, c } = scene({
+        creatureAt: { x: 150 + CREATURE_DARK_SIGHT_M + 10, y: 30 },
+      });
+      player.lantern.stage = stage;
+      player.lantern.target = stage;
+
+      creatureSense(world, TICK_DT);
+      expect(c.lastLight).toBeNull();
+    }
+  });
+
+  it('is stopped by rock — cover is the stealth tool, not darkness', () => {
     const { world, player, c } = scene({ creatureAt: { x: 160, y: 30 } });
     player.lantern.stage = 'full';
     player.lantern.target = 'full';
@@ -104,8 +116,15 @@ describe('sensing light (Q37/Q59, L12)', () => {
   });
 });
 
-describe('sensing sound (L12, Q58)', () => {
-  it('is not consulted at all while a light is visible', () => {
+describe('sensing sound (Q58)', () => {
+  /** A wall between the two, so sight is off the table and hearing is not. */
+  function behindCover(creatureAt: number) {
+    const s = scene({ creatureAt: { x: creatureAt, y: 30 } });
+    for (let ty = 0; ty < 60; ty++) setTile(s.world.grid, 155, ty, OCCLUDER_OPAQUE);
+    return s;
+  }
+
+  it('is not consulted at all while it can see you', () => {
     const { world, player, c } = scene({ creatureAt: { x: 160, y: 30 } });
     player.lantern.stage = 'full';
     player.lantern.target = 'full';
@@ -118,10 +137,8 @@ describe('sensing sound (L12, Q58)', () => {
     expect(c.lastSound).toBeNull();
   });
 
-  it('takes over the moment the light goes out', () => {
-    const { world, player, c } = scene({ creatureAt: { x: 158, y: 30 } });
-    player.lantern.stage = 'hooded';
-    player.lantern.target = 'hooded';
+  it('takes over the moment cover breaks the line', () => {
+    const { world, player, c } = behindCover(158);
     player.vel = { x: 4, y: 0 };
 
     emitSounds(world);
@@ -131,15 +148,14 @@ describe('sensing sound (L12, Q58)', () => {
     expect(c.lastSound).not.toBeNull();
   });
 
-  it('hears nothing at all from a player standing still (Q58)', () => {
-    const { world, player, c } = scene({ creatureAt: { x: 152, y: 30 } });
-    player.lantern.stage = 'hooded';
-    player.lantern.target = 'hooded';
+  it('hears nothing at all from a player standing still behind cover (Q58)', () => {
+    const { world, player, c } = behindCover(158);
     player.vel = { x: 0, y: 0 };
 
     emitSounds(world);
     creatureSense(world, TICK_DT);
 
+    expect(c.lastLight).toBeNull();
     expect(c.lastSound).toBeNull();
   });
 
@@ -173,31 +189,28 @@ describe('the priority switch (Q60)', () => {
     expect(c.pos.x).toBeLessThan(before);
   });
 
-  it('drops to investigate when the light goes out, then gives up (L12)', () => {
+  it('drops to investigate when you break the line, then gives up', () => {
     const { world, player, c } = scene({ creatureAt: { x: 175, y: 30 } });
     player.lantern.stage = 'full';
     player.lantern.target = 'full';
     run(world, 0.5);
     expect(c.state).toBe('pursue');
 
-    // Hood the lantern and hold absolutely still: no light, no sound.
-    player.lantern.stage = 'hooded';
-    player.lantern.target = 'hooded';
+    // Put rock between you and hold absolutely still: no sight, no sound.
+    for (let ty = 0; ty < 60; ty++) setTile(world.grid, 165, ty, OCCLUDER_OPAQUE);
     player.vel = { x: 0, y: 0 };
 
     run(world, 1);
     expect(c.state).toBe('investigate');
 
-    // Long enough for both the light memory and the search to lapse.
     run(world, CREATURE_LIGHT_MEMORY_SEC + 12);
     expect(['patrol', 'return']).toContain(c.state);
     expect(c.lastLight).toBeNull();
   });
 
-  it('hunts a sound when there is no light to chase', () => {
+  it('hunts a sound when cover has taken its sight away', () => {
     const { world, player, c } = scene({ creatureAt: { x: 158, y: 30 } });
-    player.lantern.stage = 'hooded';
-    player.lantern.target = 'hooded';
+    for (let ty = 0; ty < 60; ty++) setTile(world.grid, 155, ty, OCCLUDER_OPAQUE);
     player.vel = { x: 4, y: 0 };
 
     run(world, TICK_DT * 2);
@@ -206,8 +219,7 @@ describe('the priority switch (Q60)', () => {
 
   it('forgets a sound it has walked to and found nothing at', () => {
     const { world, player, c } = scene({ creatureAt: { x: 158, y: 30 } });
-    player.lantern.stage = 'hooded';
-    player.lantern.target = 'hooded';
+    for (let ty = 0; ty < 60; ty++) setTile(world.grid, 155, ty, OCCLUDER_OPAQUE);
     player.vel = { x: 4, y: 0 };
     run(world, TICK_DT * 2);
     expect(c.state).toBe('hunt');
@@ -219,7 +231,7 @@ describe('the priority switch (Q60)', () => {
   });
 
   it('patrols when it knows nothing', () => {
-    const { world, player, c } = scene();
+    const { world, player, c } = scene({ creatureAt: { x: 150 + CREATURE_DARK_SIGHT_M + 20, y: 30 } });
     player.lantern.stage = 'hooded';
     player.lantern.target = 'hooded';
     run(world, 1);
@@ -239,7 +251,9 @@ describe('the priority switch (Q60)', () => {
 
 describe('speeds (Q61)', () => {
   it('pursues faster than it patrols', () => {
-    const patrolling = scene({ creatureAt: { x: 160, y: 30 } });
+    // Well outside its sight, so it is genuinely patrolling rather than
+    // quietly pursuing a player it can see perfectly well in the dark.
+    const patrolling = scene({ creatureAt: { x: 150 + CREATURE_DARK_SIGHT_M + 20, y: 30 } });
     patrolling.player.lantern.stage = 'hooded';
     patrolling.player.lantern.target = 'hooded';
     run(patrolling.world, 2);

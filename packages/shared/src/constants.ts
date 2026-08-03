@@ -474,13 +474,28 @@ export const CREATURE_SOUND_MEMORY_SEC = 8;
 export const CREATURE_INVESTIGATE_SEC = 5;
 
 /**
- * How far off a player counts as seen when they are standing in firelight.
+ * How far a creature sees, in metres. Flat, whatever your lantern is doing.
  *
- * Q59 keys light detection to the lantern stage (Q37), which alone would make
- * standing at the bonfire with a hooded lantern nearly invisible — the exact
- * opposite of what a fire is. A body lit by a fire is a body you can see.
+ * DESIGN CHANGE, overriding L12 and Q37's detection column.
+ *
+ * The original model had them hunting your light and losing you entirely when
+ * it went out, with brighter light spotted from further (4m hooded / 45m full).
+ * That made darkness a hiding place and produced two roughly equal strategies —
+ * go bright and be seen from far but vaguely, or go dark and be invisible until
+ * close. A dilemma where the player cannot tell which side is better is worse
+ * than one option with a price on it.
+ *
+ * They see in the dark. That is their native state, and turning your lantern
+ * down hands them clean dark to see through. Light is *camouflage*: it floods
+ * the area and wrecks their fix on you (see CREATURE_LIGHT_ERROR_MULT). So
+ * bright is always tactically better and fuel is the only thing stopping you —
+ * one axis, risk against reward, with a death spiral at the bottom of it when
+ * the tank runs dry and you are forced dim.
+ *
+ * Detection is FLAT on purpose. If bright light also drew them from further,
+ * being dark would have merit again and the dilemma would be back.
  */
-export const CREATURE_SEES_FIRELIT_M = 30;
+export const CREATURE_DARK_SIGHT_M = 60;
 
 /** Sabotage (Q24): seconds to scatter the pile, and how far the logs fly. */
 export const CREATURE_SABOTAGE_SEC = 3;
@@ -490,18 +505,16 @@ export const CREATURE_SABOTAGE_THROW_M = 6;
 export const CREATURE_SABOTAGE_TAKE = 4;
 
 /**
- * How vague a light makes you (L12: "they hunt your light").
+ * How much a light dazzles, as a multiple of its own radius.
  *
- * A creature never learns where you ARE — it learns where the glow is, and
- * heads for a point somewhere inside it. This multiplier is how much of the
- * light's own radius becomes error at the far edge of detection; the error
- * shrinks to nothing as it closes, so it still catches you at arm's length.
+ * A creature never learns where you ARE — it learns roughly where the glow is
+ * and heads for a point inside it. A wider glow is a worse answer, so a full
+ * lantern's 9m circle leaves a hunter guessing at a spot up to 9m off while a
+ * hooded one barely misles it at all.
  *
- * At 1.0 a full lantern's 9m circle means a hunter 45m away is guessing at a
- * spot up to 9m off. That is the trade the shutter exists for: a bright lantern
- * is seen from further AND tells them less, so neither stage dominates. It is
- * also why a big camp fire is safe — they know somebody is at the bonfire, not
- * which side of it you are standing on.
+ * This is the entire defensive value of light, and it is why camp is safe: a
+ * roaring bonfire is a 14m glow with somebody in it somewhere, so they know you
+ * are at the fire and not which side of it you are standing on.
  */
 export const CREATURE_LIGHT_ERROR_MULT = 1;
 

@@ -18,7 +18,7 @@ import {
   CREATURE_SABOTAGE_SEC,
   CREATURE_SABOTAGE_TAKE,
   CREATURE_SABOTAGE_THROW_M,
-  CREATURE_SEES_FIRELIT_M,
+  CREATURE_DARK_SIGHT_M,
   CREATURE_SIEGE_RANGE_M,
   CREATURE_SNIFF_MAX_SEC,
   CREATURE_SNIFF_MIN_SEC,
@@ -38,7 +38,7 @@ import { clamp, mulberry32 } from '../math.js';
 import type { Vec2 } from '../math.js';
 import { fuelFraction } from './fire.js';
 import { spawnItem } from './items.js';
-import { lanternRadius, lanternSeenAt } from './lantern.js';
+import { lanternRadius } from './lantern.js';
 import { emit, loudestAudibleAt } from './sound.js';
 import { ITEM_KINDS } from '../types.js';
 import type { Creature, CreatureState, ItemKind, WorldState } from '../types.js';
@@ -63,11 +63,12 @@ import type { Creature, CreatureState, ItemKind, WorldState } from '../types.js'
 // ---------------------------------------------------------------------------
 
 /**
- * Light first, then sound, and only when there is no light (L12).
+ * Sight first, then sound, and only when there is nothing in sight.
  *
- * The ordering is the whole design. A creature that could hear you while it
- * could also see your lantern would never give you the moment where cutting
- * the light changes what it is doing, and that moment is the game.
+ * They see in the dark, out to CREATURE_DARK_SIGHT_M, and line of sight is the
+ * only thing that stops them. So hearing is not what happens when you go dark —
+ * it is what happens when you put something *solid* between you, which makes
+ * cover the stealth tool rather than darkness.
  */
 export function creatureSense(world: WorldState, dt: number): void {
   const fireFrac = fuelFraction(world.fire);
@@ -76,9 +77,18 @@ export function creatureSense(world: WorldState, dt: number): void {
     const c = world.creatures[id];
     if (!c || !c.alive) continue;
 
-    // Memories decay whether or not anything refreshes them this tick.
+    // Memories decay whether or not anything refreshes them this tick, and a
+    // lapsed memory is dropped rather than left lying on the blackboard.
+    //
+    // It used to be cleared only on arrival, which was fine while a creature
+    // could always walk to the spot. Cover changed that: put rock between you
+    // and it never reaches the place it was heading for, so an expired memory
+    // would sit there forever and the creature would never truly forget you.
     c.lightMemorySec = Math.max(0, c.lightMemorySec - dt);
+    if (c.lightMemorySec <= 0) c.lastLight = null;
+
     c.soundMemorySec = Math.max(0, c.soundMemorySec - dt);
+    if (c.soundMemorySec <= 0) c.lastSound = null;
 
     const lit = brightestVisibleLight(world, c, fireFrac);
     if (lit) {
@@ -111,14 +121,12 @@ interface SeenLight {
 }
 
 /**
- * The nearest light this creature can actually see.
+ * The nearest thing this creature can see, and how badly lit it is.
  *
- * Detection range comes from the lantern itself (Q37/Q59) — hooded is 4m, full
- * is 45m, wider still mid-bloom — plus line of sight through the true grid. A
- * player standing in firelight is visible much further whatever their shutter
- * is doing, because a fire lights bodies and hiding at the bonfire by closing a
- * lantern would be nonsense; in that case the FIRE is the light they have
- * found, which is why its radius is what makes camp so hard to pinpoint in.
+ * Range is flat (CREATURE_DARK_SIGHT_M) and line of sight through the true grid
+ * is the only thing that breaks it. What varies is the *radius* carried back:
+ * that is the glow you are standing in, and it is what decides how badly the
+ * creature's guess will miss.
  */
 function brightestVisibleLight(world: WorldState, c: Creature, fireFrac: number): SeenLight | null {
   let best: SeenLight | null = null;
@@ -134,21 +142,16 @@ function brightestVisibleLight(world: WorldState, c: Creature, fireFrac: number)
     // Asks the lantern how far it can be seen rather than reading the stage
     // off the struct: mid-shutter and mid-bloom are real states a player can be
     // caught in, and a creature must see the light that is actually there.
-    let range = lanternSeenAt(p.lantern);
+    // The glow you are standing in is what blurs you. Your own lantern, or the
+    // bonfire if you are in its light — whichever is throwing more.
     let radius = lanternRadius(p.lantern);
-
-    // Standing in firelight: what they have spotted is the FIRE lighting a
-    // body, so the fire's radius is the vagueness, not the lantern's. A roaring
-    // camp is a 14m glow with somebody in it somewhere.
     if (firelit && canSee(world.grid, fire.pos, fire.lightRadiusM, p.pos)) {
-      if (CREATURE_SEES_FIRELIT_M > range) {
-        range = CREATURE_SEES_FIRELIT_M;
-        radius = Math.max(radius, fire.lightRadiusM);
-      }
+      radius = Math.max(radius, fire.lightRadiusM);
     }
 
     const d = Math.hypot(p.pos.x - c.pos.x, p.pos.y - c.pos.y);
-    if (d > range || d >= bestDist) continue;
+    // Flat range. Going dark does not shorten it — it only sharpens them up.
+    if (d > CREATURE_DARK_SIGHT_M || d >= bestDist) continue;
     if (!raycastLOS(world.grid, c.pos, p.pos)) continue;
 
     best = { pos: p.pos, radiusM: radius, dist: d };
@@ -163,9 +166,12 @@ function brightestVisibleLight(world: WorldState, c: Creature, fireFrac: number)
     const dl = world.droppedLanterns[id];
     if (!dl) continue;
 
-    const range = lanternSeenAt(dl.lantern);
+    // A lantern on the ground is still an anomaly worth walking at, and it is
+    // still the thing they will fix on rather than you — which is the whole
+    // point of putting one down (Q41).
+    if (lanternRadius(dl.lantern) <= 0) continue;
     const d = Math.hypot(dl.pos.x - c.pos.x, dl.pos.y - c.pos.y);
-    if (d > range || d >= bestDist) continue;
+    if (d > CREATURE_DARK_SIGHT_M || d >= bestDist) continue;
     if (!raycastLOS(world.grid, c.pos, dl.pos)) continue;
 
     best = { pos: dl.pos, radiusM: lanternRadius(dl.lantern), dist: d };
@@ -176,21 +182,20 @@ function brightestVisibleLight(world: WorldState, c: Creature, fireFrac: number)
 }
 
 /**
- * Where the creature THINKS the light is (L12: "they hunt your light").
+ * Where the creature THINKS you are.
  *
- * This is the single most important function in the creature model. A hunter
- * never receives your position — it receives a point somewhere inside the glow
- * it can see, and it commits to that point for a beat before re-estimating.
+ * The single most important function in the creature model. A hunter never
+ * receives your position — it receives a point inside whatever glow you are
+ * standing in, and commits to that point for a beat before re-estimating.
  *
- * Two consequences fall out of it, and both are the design working rather than
- * side effects. A brighter lantern is spotted from further away AND tells them
- * less, so no shutter stage dominates and the choice stays live. And a big fire
- * makes camp genuinely hard to pinpoint inside — they know somebody is at the
- * bonfire, not which side of it you are on, which is why you can watch them
- * come in across lit ground.
+ * This is what makes light a defence. Dark and it is looking right at you;
+ * bright and it is guessing at a spot up to a glow-radius away, which is why
+ * you can stand in a roaring camp watching one converge on the wrong side of
+ * the bonfire. The price is fuel, and fuel is the only price — which is the
+ * whole risk-reward axis.
  *
- * The error collapses as they close, so this never makes them harmless: at
- * arm's length they are looking straight at you.
+ * The error still collapses at arm's length, so light is never invulnerability:
+ * once something is inside your lit circle it can see you perfectly well.
  */
 function perceive(world: WorldState, c: Creature, light: SeenLight): Vec2 {
   // Inside the lit circle it is looking straight at you. Outside, its idea of
