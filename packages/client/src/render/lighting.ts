@@ -1,5 +1,5 @@
-import { LIGHT_FALLOFF_STOPS, LIGHT_GRADIENT_PX, PIXELS_PER_METRE, visibilityPolygon } from '@ember/shared';
-import type { OccluderGrid, Vec2 } from '@ember/shared';
+import { LIGHT_FALLOFF_STOPS, LIGHT_GRADIENT_PX, PIXELS_PER_METRE } from '@ember/shared';
+import type { Vec2 } from '@ember/shared';
 import { Container, Graphics, Sprite, Texture } from 'pixi.js';
 
 export interface Light {
@@ -40,15 +40,21 @@ export class LightField {
   /**
    * Sprites are pooled rather than recreated: at 20+ lights and 60fps, churning
    * Graphics objects every frame is the difference between smooth and not.
+   *
+   * The polygons are computed by the caller and passed in, positionally paired
+   * with `lights`. Casting them is the most expensive thing the renderer does
+   * and memory rot needs the same shapes in the same frame (§21 Step 5.1), so
+   * they are cast once and shared rather than twice and hoped about.
    */
-  update(grid: OccluderGrid, lights: Light[]): void {
+  update(lights: Light[], polys: Vec2[][]): void {
     let used = 0;
 
-    for (const light of lights) {
-      if (light.radiusM <= 0 || light.intensity <= 0) continue;
+    for (let i = 0; i < lights.length; i++) {
+      const light = lights[i];
+      if (!light || light.radiusM <= 0 || light.intensity <= 0) continue;
 
       const entry = this.acquire(used++);
-      const poly = visibilityPolygon(grid, light.pos, light.radiusM);
+      const poly = polys[i] ?? [];
 
       entry.shape.clear();
       if (poly.length >= 3) {

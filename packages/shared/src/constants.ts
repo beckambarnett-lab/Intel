@@ -199,12 +199,154 @@ export const LANTERN_BLOOM_MULT = 1.7;
 export const LANTERN_BLOOM_SEC = 0.25;
 
 // ---------------------------------------------------------------------------
-// Memory rot (§7)
+// Memory rot (§7, Q46–Q55)
+//
+// Everything below is presentation. The rotting map lies about how the world
+// LOOKS and never about where anything IS (Q48) — collision and line of sight
+// read `grid.ts` and have no access to any of this.
 // ---------------------------------------------------------------------------
 
 export const MEMORY_ROT_START_SEC = 30; // Q46
 export const MEMORY_ROT_FULL_SEC = 240; // Q46
-export const PHANTOM_SPAWN_INTERVAL_SEC = 20; // Q49
+
+/** Resolution of the last-seen buffer (§21 Step 5.1). One texel per metre. */
+export const MEMORY_TEXELS_PER_METRE = 1;
+
+/**
+ * The span the last-seen texture can encode, in seconds.
+ *
+ * Times are stored as a 16-bit value across two 8-bit channels, so this is the
+ * whole clock: 4096s is roughly twice the longest plausible run (Q136 targets
+ * 25–35 minutes) and still leaves 0.06s of precision, which is far finer than
+ * a rot curve measured in tens of seconds needs.
+ */
+export const MEMORY_TIME_RANGE_SEC = 4096;
+
+/**
+ * Lights further than this outside the viewport do not refresh memory.
+ *
+ * Q53 makes memory a record of what YOU saw. Without this gate the bonfire's
+ * own light polygon would keep camp permanently fresh in your memory from 800m
+ * away, which is a lie of exactly the kind this system exists to avoid.
+ */
+export const MEMORY_WRITE_MARGIN_M = 12;
+
+/**
+ * Brightness of remembered ground, fresh and fully rotten (Q46/Q47).
+ *
+ * Well under 1 at both ends: memory is never as legible as light, or the
+ * lantern stops being the thing you make decisions about. Fully rotten is
+ * deliberately near the floor of visibility rather than at zero — the dark is
+ * not empty, it is a lie you remember.
+ */
+export const MEMORY_BRIGHTNESS_FRESH = 0.22;
+export const MEMORY_BRIGHTNESS_ROTTEN = 0.05;
+
+/** Saturation retained, fresh and rotten. Q47: "saturation to near-zero". */
+export const MEMORY_SATURATION_FRESH = 0.55;
+export const MEMORY_SATURATION_ROTTEN = 0.04;
+
+/** Domain-warp amplitude in screen pixels, fresh and fully rotten (Q47). */
+export const MEMORY_WARP_FRESH_PX = 0.6;
+export const MEMORY_WARP_ROTTEN_PX = 9;
+
+/**
+ * Wavelength of the warp field in metres, and how much harder it pulls along
+ * one axis than the other — the anisotropy is what makes shapes *lean* rather
+ * than simply wobble (Q47).
+ */
+export const MEMORY_WARP_SCALE_M = 7;
+export const MEMORY_WARP_LEAN = 2.2;
+
+/**
+ * Speed the warp field drifts, in Hz. Very slow on purpose: a static warp reads
+ * as "the renderer is broken", a fast one as a screensaver. At this rate the
+ * world is breathing and you are not sure it is.
+ */
+export const MEMORY_WARP_HZ = 0.05;
+
+/** Unsharp-mask strength at full rot, and its tap distance in pixels (Q47). */
+export const MEMORY_EDGE_GAIN = 1.6;
+export const MEMORY_EDGE_TAP_PX = 1.4;
+
+/**
+ * Light luminance at which a pixel counts as fully, truly lit.
+ *
+ * Below it the composite crossfades toward memory, so the outer edge of your
+ * lantern is where seeing stops and remembering starts. Above it the render is
+ * bit-for-bit what Steps 2–4 produced.
+ */
+export const MEMORY_LIT_REFERENCE = 0.3;
+
+/**
+ * Fraction of a light's radius that is "properly lit" (Q55).
+ *
+ * You only remember ground you saw *well*. Only this inner part of a light is
+ * committed to memory; the outer ring illuminates without recording, so ground
+ * you have merely grazed with the edge of your beam still counts as unseen.
+ *
+ * This is what makes Q55 observable rather than theoretical. Without it, the
+ * instant any light touches new ground it is already remembered, and
+ * "distorted until properly lit" describes a state lasting one frame. There is
+ * no seam at the boundary: MEMORY_LIT_REFERENCE saturates well inside it, so
+ * the distortion has already faded out by the time the recorded area ends.
+ */
+export const MEMORY_PROPERLY_LIT_FRAC = 0.6;
+
+/**
+ * How hard first-sight distortion pulls (Q55) — the leading edge of your beam
+ * over new territory crawls, and settles as you put real light on it.
+ */
+export const MEMORY_FIRST_SIGHT_WARP_PX = 5;
+export const MEMORY_FIRST_SIGHT_DESAT = 0.8;
+
+// ---------------------------------------------------------------------------
+// Phantoms (Q49–Q52)
+//
+// Client-only. They are hallucinations of your own memory, so they are never
+// simulated, never networked, and never touch the sim.
+// ---------------------------------------------------------------------------
+
+/** Roughly one per this many seconds in fully-rotten memory in view (Q49). */
+export const PHANTOM_SPAWN_INTERVAL_SEC = 20;
+
+/**
+ * ASSUMPTION — Q49 gives a spawn rate and Q50 a behaviour, but nothing bounds
+ * the population or its lifetime. Left unbounded a long run accumulates a crowd
+ * and the ambiguity that makes them work (Q52) collapses into noise. Three at
+ * once, each short-lived, keeps a sighting rare enough to be worth reacting to.
+ */
+export const PHANTOM_MAX_CONCURRENT = 3;
+export const PHANTOM_LIFETIME_SEC = 45;
+
+/** Q50: they move, slowly, toward you. Well under a walking player. */
+export const PHANTOM_SPEED_MPS = 0.7;
+
+/**
+ * Where one may appear, relative to you. The near bound keeps them from
+ * blinking into existence in your face; the far bound keeps them inside the
+ * "within view" of Q49.
+ */
+export const PHANTOM_SPAWN_MIN_M = 9;
+export const PHANTOM_SPAWN_MAX_M = 26;
+
+/** Beyond this they are forgotten rather than followed home. */
+export const PHANTOM_DESPAWN_M = 40;
+
+/** Candidate points tried per spawn roll before giving up for this frame. */
+export const PHANTOM_SPAWN_ATTEMPTS = 12;
+
+/** Below this rot the memory is too fresh to be lying to you yet (Q49). */
+export const PHANTOM_MIN_ROT = 0.35;
+
+/**
+ * The figure. Same silhouette a dimly-lit creature will use in Step 6 — Q52
+ * turns on the two being indistinguishable, so they share one renderer.
+ */
+export const SILHOUETTE_BODY_M = 0.42;
+export const SILHOUETTE_HEAD_M = 0.2;
+export const SILHOUETTE_LIMB_M = 0.55;
+export const SILHOUETTE_ALBEDO = 0xbcb3a6;
 
 // ---------------------------------------------------------------------------
 // Sound (§9, Q58)
