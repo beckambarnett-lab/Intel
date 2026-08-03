@@ -66,10 +66,11 @@ async function main(): Promise<void> {
     }
 
     const players = net.renderedPlayers(now);
+    const creatures = net.renderedCreatures(now);
     const me = players.find((p) => p.isLocal) ?? null;
     // Real elapsed time, not the fixed sim step: flicker and the bloom fade are
     // presentation and should run at display rate rather than at 20Hz.
-    stage.render(net.grid, net.fire, players, net.visibleItems, me, elapsed / 1000);
+    stage.render(net.grid, net.fire, players, creatures, net.visibleItems, me, elapsed / 1000);
 
     hud.textContent = formatHud(net);
     requestAnimationFrame(frame);
@@ -131,6 +132,15 @@ function formatHud(net: NetClient): string {
 
   const pile = net.woodpileContents;
   if (pile) lines.push(`woodpile ${pile.log} logs, ${pile.branch} branches`);
+
+  // Only creatures you can actually see appear here — the server sent nothing
+  // else. An empty line does not mean an empty wood.
+  const seen = net.renderedCreatures(performance.now());
+  if (seen.length > 0) {
+    lines.push(`creatures in sight: ${seen.map((c) => c.state).join(', ')}`);
+  }
+
+  if (me && !me.alive) lines.push('YOU ARE DEAD — ghosts arrive in Step 8');
 
   if (net.outcome === 'embersDied') lines.push('THE EMBERS DIED — run over');
 

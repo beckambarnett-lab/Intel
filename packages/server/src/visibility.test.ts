@@ -1,9 +1,11 @@
 import {
   LANTERN_STAGES,
   VISIBILITY_HYSTERESIS_MS,
+  createCreature,
   createPlayer,
   createWorld,
   fillRect,
+  killCreature,
   spawnItem,
 } from '@ember/shared';
 import type { Player, PlayerId, WorldState } from '@ember/shared';
@@ -335,5 +337,108 @@ describe('removal hysteresis', () => {
     delete w.players['p2'];
 
     expect(idsVisibleTo(index, w, 'p1', 10)).toEqual(['p1']);
+  });
+});
+
+/**
+ * Creature culling — the load-bearing case (Q122).
+ *
+ * A hunter stalking you from outside your light must not be on the wire at
+ * all. This is the anti-cheat rule applied to the entity class it matters most
+ * for: a player who can read creature positions out of devtools is not playing
+ * a horror game, and no amount of tuning the creatures fixes that.
+ */
+describe('creature visibility', () => {
+  function shutter(p: Player, stage: 'hooded' | 'low' | 'full'): void {
+    // Both, always. `lanternRadius` interpolates toward the target, so setting
+    // only the stage leaves the light at whatever it was heading for.
+    p.lantern.stage = stage;
+    p.lantern.target = stage;
+  }
+
+  function withCreature(w: WorldState, id: string, x: number, y: number) {
+    const c = createCreature(id, { x, y }, 'nearWood');
+    w.creatures[id] = c;
+    return c;
+  }
+
+  it('sends a creature standing in your lantern', () => {
+    const w = world();
+    const p = addPlayer(w, 'p1', 40, 20);
+    shutter(p, 'full');
+    withCreature(w, 'c1', 40 + LANTERN_STAGES.full.radiusM / 2, 20);
+
+    const index = new VisibilityIndex();
+    expect(index.visibleCreaturesTo(w, 'p1', 0).map((c) => c.id)).toEqual(['c1']);
+  });
+
+  it('sends nothing at all about one in the dark', () => {
+    const w = world();
+    const p = addPlayer(w, 'p1', 40, 20);
+    shutter(p, 'hooded');
+    withCreature(w, 'c1', 55, 20);
+
+    const index = new VisibilityIndex();
+    expect(index.visibleCreaturesTo(w, 'p1', 0)).toEqual([]);
+  });
+
+  it('does not send one through a wall', () => {
+    const w = world();
+    const p = addPlayer(w, 'p1', 40, 20);
+    shutter(p, 'full');
+    fillRect(w.grid, { x: 43, y: 0, w: 2, h: 40 });
+    withCreature(w, 'c1', 47, 20);
+
+    const index = new VisibilityIndex();
+    expect(index.visibleCreaturesTo(w, 'p1', 0)).toEqual([]);
+  });
+
+  it('sends one lit by the bonfire that you have a line to', () => {
+    const w = world();
+    const p = addPlayer(w, 'p1', 20, 10);
+    shutter(p, 'hooded');
+    withCreature(w, 'c1', FIRE.x + FIRE_RADIUS / 2, FIRE.y);
+
+    const index = new VisibilityIndex();
+    expect(index.visibleCreaturesTo(w, 'p1', 0).map((c) => c.id)).toEqual(['c1']);
+  });
+
+  it('holds it briefly after it leaves your light, then drops it', () => {
+    const w = world();
+    const p = addPlayer(w, 'p1', 40, 20);
+    shutter(p, 'full');
+    const c = withCreature(w, 'c1', 44, 20);
+
+    const index = new VisibilityIndex();
+    expect(index.visibleCreaturesTo(w, 'p1', 0)).toHaveLength(1);
+
+    // Steps into the dark. Hysteresis keeps it on the wire briefly so it does
+    // not strobe at the boundary — it never reveals one early.
+    c.pos.x = 70;
+    expect(index.visibleCreaturesTo(w, 'p1', VISIBILITY_HYSTERESIS_MS / 2)).toHaveLength(1);
+    expect(index.visibleCreaturesTo(w, 'p1', VISIBILITY_HYSTERESIS_MS + 1)).toHaveLength(0);
+  });
+
+  it('never sends a dead one', () => {
+    const w = world();
+    const p = addPlayer(w, 'p1', 40, 20);
+    shutter(p, 'full');
+    const c = withCreature(w, 'c1', 42, 20);
+    killCreature(c);
+
+    const index = new VisibilityIndex();
+    expect(index.visibleCreaturesTo(w, 'p1', 0)).toEqual([]);
+  });
+
+  it('carries position and posture, and nothing the creature knows', () => {
+    const w = world();
+    const p = addPlayer(w, 'p1', 40, 20);
+    shutter(p, 'full');
+    const c = withCreature(w, 'c1', 42, 20);
+    c.lastLight = { x: 999, y: 999 };
+    c.lastSound = { x: 888, y: 888 };
+
+    const view = new VisibilityIndex().visibleCreaturesTo(w, 'p1', 0)[0];
+    expect(Object.keys(view ?? {}).sort()).toEqual(['id', 'pos', 'state']);
   });
 });

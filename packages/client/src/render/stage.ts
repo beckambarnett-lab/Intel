@@ -22,7 +22,7 @@ import {
 } from '@ember/shared';
 import type { FireView, OccluderGrid, Vec2, WorldItem } from '@ember/shared';
 import { Application, Container, Graphics, RenderTexture, Text, TextStyle } from 'pixi.js';
-import type { RenderedPlayer } from '../net.js';
+import type { RenderedCreature, RenderedPlayer } from '../net.js';
 import { Composite } from './composite.js';
 import { HorizonBloom } from './hud.js';
 import { LightField } from './lighting.js';
@@ -89,7 +89,15 @@ export class Stage {
   private fire = new Graphics();
   private woodpile = new Graphics();
   private itemLayer = new Graphics();
-  private phantomLayer = new Graphics();
+  /**
+   * Phantoms AND creatures, drawn into one layer by one function.
+   *
+   * Q52 requires that a real creature in stale memory and a phantom invented by
+   * that memory be indistinguishable. Sharing a draw call is the only version
+   * of that guarantee which cannot drift: there is no second code path to
+   * accidentally give one of them a tell.
+   */
+  private figureLayer = new Graphics();
   private bodies = new Container();
   private lights = new LightField();
   private bloom = new HorizonBloom();
@@ -154,10 +162,10 @@ export class Stage {
     this.world.addChild(this.occluders);
     this.world.addChild(this.woodpile);
     this.world.addChild(this.itemLayer);
-    // Phantoms go into the albedo alongside everything else, which is what
-    // makes Q52 work: they are dimmed, drained and warped by the memory layer
-    // exactly as a real creature standing in that same stale ground would be.
-    this.world.addChild(this.phantomLayer);
+    // Figures go into the albedo alongside everything else, which is what makes
+    // Q52 work: they are dimmed, drained and warped by the memory layer exactly
+    // as anything else standing in that same stale ground would be.
+    this.world.addChild(this.figureLayer);
     this.world.addChild(this.fire);
     this.world.addChild(this.bodies);
 
@@ -271,6 +279,7 @@ export class Stage {
     grid: OccluderGrid,
     fire: FireView | null,
     players: RenderedPlayer[],
+    creatures: RenderedCreature[],
     worldItems: WorldItem[],
     cameraTargetM: { x: number; y: number } | null,
     dtSec: number,
@@ -393,7 +402,7 @@ export class Stage {
 
     // Phantoms move and are dispelled BEFORE they are drawn, so a phantom that
     // walked into your light this frame never reaches the albedo at all (Q51).
-    this.updatePhantoms(grid, lights, camera, dtSec);
+    this.updatePhantoms(grid, lights, camera, dtSec, creatures);
 
     this.lights.update(lights, polys);
     this.drawFlame(fire);
@@ -451,8 +460,16 @@ export class Stage {
     lights: Light[],
     camera: Vec2 | null,
     dtSec: number,
+    creatures: RenderedCreature[],
   ): void {
-    this.phantomLayer.clear();
+    this.figureLayer.clear();
+
+    // Real hunters first, through the identical draw call the phantoms use.
+    // The server only sent these because this player can see them (Q122).
+    for (const c of creatures) {
+      const facing = Math.atan2(camera ? camera.y - c.y : 0, camera ? camera.x - c.x : 1);
+      drawSilhouette(this.figureLayer, c.x, c.y, facing);
+    }
 
     const seen = this.seen;
     if (!camera || !seen) return;
@@ -473,7 +490,7 @@ export class Stage {
     for (const phantom of this.phantoms.phantoms) {
       // Facing the player, because they are always coming toward you (Q50).
       const facing = Math.atan2(camera.y - phantom.pos.y, camera.x - phantom.pos.x);
-      drawSilhouette(this.phantomLayer, phantom.pos.x, phantom.pos.y, facing);
+      drawSilhouette(this.figureLayer, phantom.pos.x, phantom.pos.y, facing);
     }
   }
 

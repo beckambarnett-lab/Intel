@@ -4,12 +4,14 @@ import {
   LANTERN_BLOOM_SEC,
   LANTERN_SHUTTER_SEC,
   LANTERN_STAGES,
+  LANTERN_STAGE_ORDER,
   LANTERN_TANK,
   TICK_DT,
 } from '../constants.js';
-import { createPlayer, createWorld, emptyInput } from '../types.js';
+import { createLantern, createPlayer, createWorld, emptyInput } from '../types.js';
 import type { InputFrame, WorldState } from '../types.js';
 import { step } from './index.js';
+import { lanternSeenAt } from './lantern.js';
 import { lanternRadius } from './lantern.js';
 
 function worldWithPlayer(): WorldState {
@@ -168,5 +170,50 @@ describe('determinism under replay', () => {
     settle(world, 30);
     expect(ls.stage).toBe('full');
     expect(ls.target).toBe('full');
+  });
+});
+
+/**
+ * Q40 makes the opening bloom "a tell that can get you caught". These are the
+ * assertions that make that a mechanic rather than a visual effect.
+ */
+describe('how far off you can be seen (Q37/Q40)', () => {
+  it('reads the Q37 table at rest', () => {
+    const ls = createLantern();
+    for (const stage of LANTERN_STAGE_ORDER) {
+      ls.stage = stage;
+      ls.target = stage;
+      ls.transition = 0;
+      ls.bloom = 0;
+      expect(lanternSeenAt(ls)).toBeCloseTo(LANTERN_STAGES[stage].seenAtM, 5);
+    }
+  });
+
+  it('sweeps rather than jumping while the shutter moves', () => {
+    const ls = createLantern();
+    ls.stage = 'hooded';
+    ls.target = 'full';
+    ls.transition = LANTERN_SHUTTER_SEC / 2;
+    ls.bloom = 0;
+
+    const mid = lanternSeenAt(ls);
+    expect(mid).toBeGreaterThan(LANTERN_STAGES.hooded.seenAtM);
+    expect(mid).toBeLessThan(LANTERN_STAGES.full.seenAtM);
+  });
+
+  it('gives you away from further than the stage you opened to, mid-bloom', () => {
+    const ls = createLantern();
+    ls.stage = 'low';
+    ls.target = 'low';
+    ls.transition = 0;
+    ls.bloom = LANTERN_BLOOM_SEC;
+
+    expect(lanternSeenAt(ls)).toBeGreaterThan(LANTERN_STAGES.low.seenAtM);
+  });
+
+  it('cannot be seen at all with a dry tank', () => {
+    const ls = createLantern();
+    ls.fuel = 0;
+    expect(lanternSeenAt(ls)).toBe(0);
   });
 });

@@ -49,6 +49,36 @@ export function lanternRadius(ls: LanternState): number {
   return radius;
 }
 
+/**
+ * How far off this lantern can be seen (Q37/Q59).
+ *
+ * The same interpolation `lanternRadius` uses, over the detection column of the
+ * Q37 table instead of the radius column — so the range a creature spots you at
+ * tracks the light you are *actually* throwing, mid-shutter and all.
+ *
+ * The bloom term is the important one. Q40 calls the flare on opening "a tell
+ * that can get you caught", and this is the line that makes that literally
+ * true: for a quarter of a second after you open up, you are visible from
+ * further away than the stage you opened to. Opening at the wrong moment is
+ * supposed to cost you.
+ */
+export function lanternSeenAt(ls: LanternState): number {
+  if (ls.fuel <= 0) return 0;
+
+  const from = LANTERN_STAGES[ls.stage].seenAtM;
+  const to = LANTERN_STAGES[ls.target].seenAtM;
+
+  const t = ls.transition > 0 ? 1 - ls.transition / LANTERN_SHUTTER_SEC : 1;
+  let range = lerp(from, to, t);
+
+  if (ls.bloom > 0) {
+    const strength = ls.bloom / LANTERN_BLOOM_SEC;
+    range *= lerp(1, LANTERN_BLOOM_MULT, strength);
+  }
+
+  return range;
+}
+
 /** True while the shutter is moving toward a wider stage. */
 export function isOpening(ls: LanternState): boolean {
   return stageIndex(ls.target) > stageIndex(ls.stage);

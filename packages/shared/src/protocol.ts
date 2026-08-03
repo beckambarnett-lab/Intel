@@ -2,6 +2,7 @@ import type { MapKind } from './grid.js';
 import type { Vec2 } from './math.js';
 import type {
   Carrying,
+  CreatureState,
   FireTier,
   InputFrame,
   Outcome,
@@ -10,7 +11,7 @@ import type {
   WorldItem,
 } from './types.js';
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 /**
  * What a client is told about the fire.
@@ -31,6 +32,26 @@ export interface FireView {
   /** Present only within the firelight. */
   fuel?: number;
   emberSecLeft?: number;
+}
+
+/**
+ * A creature, as a player who can see it is allowed to know it.
+ *
+ * Position and posture only. Everything the creature actually knows — what it
+ * last saw, what it last heard, what it has been ordered to do — stays on the
+ * server. The state is here because it is legible from looking at the thing:
+ * a creature that has noticed you moves differently from one that has not, and
+ * that read is the tell the whole hunt is played against.
+ *
+ * There is no sound channel in this protocol. Sound events carry positions and
+ * sending them would hand over exactly what the culling refuses to (Q122); the
+ * player's side of hearing is Q68's angle-and-confidence blip, computed
+ * server-side in Step 7.
+ */
+export interface CreatureView {
+  id: string;
+  pos: Vec2;
+  state: CreatureState;
 }
 
 export type ClientMsg =
@@ -96,6 +117,12 @@ export type ServerMsg =
        * the new sightline open on its side too.
        */
       felled: { x: number; y: number }[];
+      /**
+       * Creatures this player can see, culled exactly like players (Q122). A
+       * hunter in the dark is not on the wire at all — which is what makes the
+       * dark worth being afraid of.
+       */
+      creatures: CreatureView[];
       /** The camp woodpile's contents. Only sent while you can see the pile. */
       woodpile: Carrying | null;
       fire: FireView;

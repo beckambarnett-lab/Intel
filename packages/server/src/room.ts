@@ -35,6 +35,7 @@ import type {
 import type { WebSocket } from 'ws';
 import type { MapKind } from '@ember/shared';
 import { tubeCampPos } from '@ember/shared';
+import { ScriptedDirector } from './director/fallback.js';
 import { VisibilityIndex, fireViewFor } from './visibility.js';
 
 /**
@@ -70,6 +71,12 @@ export class Room {
   private timer: NodeJS.Timeout | null = null;
   private nextTickAt = 0;
   private visibility = new VisibilityIndex();
+  /**
+   * Q117: the scripted director ships permanently as the LLM failure path, so
+   * it is wired in as the *only* director rather than as a stub to be replaced.
+   * Step 10 adds a commander that can override it and falls back to it.
+   */
+  private director = new ScriptedDirector();
   private readonly mapSeed: number;
   private readonly mapKind: MapKind;
 
@@ -91,6 +98,7 @@ export class Room {
         : createWorld(SANDBOX_WIDTH_M, SANDBOX_HEIGHT_M, gridFromMap(map));
     populateFromMap(this.world, map);
     refreshFire(this.world.fire);
+    this.director.spawn(this.world);
   }
 
   start(): void {
@@ -190,6 +198,10 @@ export class Room {
     // Derive tier and radii now rather than on the next tick — someone can
     // join in between, and they must not see an unlit camp.
     refreshFire(this.world.fire);
+    this.world.creatures = {};
+    this.director = new ScriptedDirector();
+    this.director.spawn(this.world);
+
     this.world.runSec = 0;
     this.world.outcome = null;
     console.log('[room] camp empty — run reset');
@@ -248,6 +260,12 @@ export class Room {
       }
     }
 
+    // The director runs OUTSIDE step(). It writes standing orders onto the
+    // blackboard; stage 10 consumes them. Keeping it out here is what lets the
+    // LLM take its place in Step 10 without the sim gaining a dependency on a
+    // network call — and what keeps step() identical on both sides (rule 4).
+    this.director.update(this.world, TICK_DT);
+
     step(this.world, inputs, TICK_DT);
     this.broadcast();
   }
@@ -267,6 +285,7 @@ export class Room {
       const players = this.visibility.visibleTo(this.world, conn.playerId, now);
       const items = this.visibility.visibleItemsTo(this.world, conn.playerId, now);
       const felled = this.visibility.visibleFelledTilesTo(this.world, conn.playerId);
+      const creatures = this.visibility.visibleCreaturesTo(this.world, conn.playerId, now);
 
       conn.socket.send(
         encode({
@@ -276,6 +295,7 @@ export class Room {
           ack: conn.ack,
           items,
           felled,
+          creatures,
           woodpile: this.woodpileViewFor(conn.playerId),
           fire: fireViewFor(this.world, conn.playerId),
           outcome: this.world.outcome,

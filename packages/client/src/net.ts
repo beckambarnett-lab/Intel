@@ -16,6 +16,7 @@ import {
 import type {
   Carrying,
   ClientMsg,
+  CreatureView,
   FireView,
   InputFrame,
   LanternState,
@@ -39,6 +40,19 @@ interface RemoteTrack {
   name: string;
   samples: RemoteSample[];
   lantern: LanternState;
+}
+
+interface CreatureTrack {
+  state: CreatureView['state'];
+  samples: RemoteSample[];
+}
+
+/** A creature to draw this frame, interpolated from snapshots. */
+export interface RenderedCreature {
+  id: string;
+  x: number;
+  y: number;
+  state: CreatureView['state'];
 }
 
 export interface RenderedPlayer {
@@ -66,6 +80,7 @@ export interface NetStats {
   rttMs: number;
   simulatedLagMs: number;
   peers: number;
+  creatures: number;
 }
 
 /**
@@ -109,6 +124,17 @@ export class NetClient {
   private seq = 0;
 
   private remote = new Map<PlayerId, RemoteTrack>();
+
+  /**
+   * Creatures are interpolated and NEVER predicted.
+   *
+   * `step()` runs its creature stages on our predicted world exactly as the
+   * server's does — rule 4 is not negotiable — but we deliberately never put a
+   * creature into that world, so those stages iterate an empty map and do
+   * nothing. Predicting a hunter from the fragments we are allowed to see would
+   * be guessing about the one thing in the game we must not guess about.
+   */
+  private creatureTracks = new Map<string, CreatureTrack>();
 
   /** Half of the simulated round trip, applied to each direction. */
   private lagHalfMs: number;
@@ -233,6 +259,7 @@ export class NetClient {
         }
 
         this.reconcile(msg.players, msg.ack);
+        this.applyCreatures(msg.creatures);
         this.applyFireView(msg.fire);
         this.applyWorldItems(msg.items, msg.felled);
         this.woodpileContents = msg.woodpile;
@@ -327,6 +354,48 @@ export class NetClient {
   // -------------------------------------------------------------------------
   // Read models for rendering
   // -------------------------------------------------------------------------
+
+  /**
+   * Track the creatures in this snapshot and drop the ones that left it.
+   *
+   * A creature vanishing from the snapshot means it walked out of our light,
+   * and it has to leave the screen with it. There is no last-known-position
+   * marker: the server stopped telling us where it is, and inventing a ghost of
+   * it on the client would put back exactly the information the culling
+   * removed.
+   */
+  private applyCreatures(creatures: CreatureView[]): void {
+    const now = performance.now();
+
+    for (const c of creatures) {
+      let track = this.creatureTracks.get(c.id);
+      if (!track) {
+        track = { state: c.state, samples: [] };
+        this.creatureTracks.set(c.id, track);
+      }
+      track.state = c.state;
+      track.samples.push({ t: now, x: c.pos.x, y: c.pos.y });
+      while (track.samples.length > 40) track.samples.shift();
+    }
+
+    const present = new Set(creatures.map((c) => c.id));
+    for (const id of this.creatureTracks.keys()) {
+      if (!present.has(id)) this.creatureTracks.delete(id);
+    }
+  }
+
+  /** Creatures to draw this frame, rendered INTERP_DELAY_MS in the past. */
+  renderedCreatures(now: number): RenderedCreature[] {
+    const out: RenderedCreature[] = [];
+    const renderTime = now - INTERP_DELAY_MS;
+
+    for (const [id, track] of this.creatureTracks) {
+      const pos = sampleAt(track.samples, renderTime);
+      if (pos) out.push({ id, x: pos.x, y: pos.y, state: track.state });
+    }
+
+    return out;
+  }
 
   /** All players to draw this frame: local predicted, remote interpolated. */
   renderedPlayers(now: number): RenderedPlayer[] {
@@ -458,6 +527,7 @@ export class NetClient {
       rttMs: this.stats.rttMs,
       simulatedLagMs: this.lagHalfMs * 2,
       peers: this.remote.size,
+      creatures: this.creatureTracks.size,
     };
   }
 }

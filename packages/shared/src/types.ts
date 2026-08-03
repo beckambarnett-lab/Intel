@@ -9,6 +9,7 @@ import {
   SANDBOX_WOODPILE_POS,
   TILE_M,
 } from './constants.js';
+import type { ZoneName } from './constants.js';
 import { createGrid } from './grid.js';
 import type { OccluderGrid } from './grid.js';
 import type { Vec2 } from './math.js';
@@ -130,6 +131,16 @@ export interface Player {
   depositProgress: number;
   /** Chopping state (Q16). Null when not swinging at anything. */
   chop: ChopState | null;
+  /**
+   * Q62: contact with a creature kills you. There is no downed state — the
+   * ghost is the second chance (L16), and it arrives in Step 8.
+   *
+   * Until then a dead player simply stands inert: they stop moving, stop making
+   * noise, and stop being hunted. The run still ends the way it always has,
+   * when the embers die, so death has a consequence without needing a system
+   * that does not exist yet.
+   */
+  alive: boolean;
 }
 
 /**
@@ -236,6 +247,7 @@ export function createPlayer(id: PlayerId, name: string, pos: Vec2): Player {
     stokeProgress: 0,
     depositProgress: 0,
     chop: null,
+    alive: true,
   };
 }
 
@@ -291,6 +303,18 @@ export interface WorldState {
   items: Record<string, WorldItem>;
   /** Standing and felled trees, by id. Never respawn (Q18). */
   trees: Record<string, Tree>;
+  /** The hunters (§8). Four of them (Q56), simulated only on the server. */
+  creatures: Record<string, Creature>;
+  /**
+   * Noises made this tick, and only this tick (§21 tick order, stage 4).
+   *
+   * Never sent to a client. A sound event carries a position, and handing one
+   * over would tell a client exactly where a creature is standing — the same
+   * leak the visibility culling exists to prevent (Q122). What a player is
+   * allowed to receive is the angle-and-confidence blip of Q68, which is
+   * computed server-side in Step 7.
+   */
+  sounds: SoundEvent[];
   /** Monotonic source of item ids. Server-authoritative. */
   nextItemId: number;
   /** Null while the run is live. */
@@ -342,6 +366,8 @@ export function createWorld(
     players: {},
     items: {},
     trees: {},
+    creatures: {},
+    sounds: [],
     nextItemId: 1,
     outcome: null,
     runSec: 0,
@@ -359,4 +385,107 @@ export function createFire(): Fire {
     emberSecLeft: FIRE_EMBER_GRACE_SEC,
     dead: false,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Sound (§9, Q58) — see sim/sound.ts
+// ---------------------------------------------------------------------------
+
+export type SoundKind = 'footfall' | 'chop' | 'scatter' | 'sniff' | 'growl';
+
+/**
+ * One noise, alive for one tick.
+ *
+ * `loudnessM` is the radius it carries, not an amplitude: Q58 is written as a
+ * table of distances, and keeping the unit as metres means the range table is
+ * the tuning surface rather than something derived from it.
+ */
+export interface SoundEvent {
+  pos: Vec2;
+  loudnessM: number;
+  kind: SoundKind;
+  tick: number;
+}
+
+// ---------------------------------------------------------------------------
+// Creatures (§8) — see sim/creatures.ts
+// ---------------------------------------------------------------------------
+
+/**
+ * Q60's eight states, as a closed union.
+ *
+ * Implemented as a priority switch over the blackboard below rather than as a
+ * behaviour-tree library (§21 Step 6.2). At this size a switch is smaller, is
+ * debuggable by reading it, and makes the precedence — which is the actual
+ * design — visible in one place instead of distributed across nodes.
+ */
+export type CreatureState =
+  | 'patrol'
+  | 'investigate'
+  | 'pursue'
+  | 'hunt'
+  | 'siege'
+  | 'sabotage'
+  | 'desperate'
+  | 'return';
+
+/**
+ * An order from whoever is commanding (L17).
+ *
+ * The scripted director issues these today (Q117); the LLM issues the same
+ * shape in Step 10, which is why the verb is a tagged field rather than
+ * implied. Only the one verb Step 6 needs exists so far — Q115's full closed
+ * set widens this union when the director that speaks it is built.
+ */
+export interface CreatureOrder {
+  verb: 'PATROL';
+  zone: ZoneName;
+}
+
+/**
+ * One hunter.
+ *
+ * Everything a creature knows is on this struct, which is the blackboard the
+ * state switch reads. Note what is *not* here: any direct reference to a
+ * player. It works from remembered positions of light and sound, so cutting
+ * your light genuinely cuts the link (L12) rather than degrading a lock it
+ * still holds.
+ */
+export interface Creature {
+  id: string;
+  pos: Vec2;
+  vel: Vec2;
+  state: CreatureState;
+  /** Where it is currently heading, in world metres. */
+  target: Vec2 | null;
+
+  /** Last place it saw a light, and how long that memory has left (L12). */
+  lastLight: Vec2 | null;
+  lightMemorySec: number;
+
+  /** Last place it heard something, and how long it will keep searching. */
+  lastSound: Vec2 | null;
+  soundMemorySec: number;
+
+  /** Seconds left casting about before it gives up and goes back to patrol. */
+  investigateSec: number;
+  /** Seconds accumulated into scattering the woodpile (Q24). */
+  sabotageSec: number;
+  /** Seconds until the next sniff (Q69). */
+  sniffSec: number;
+  /** Seconds until it repicks a wander point. */
+  patrolSec: number;
+
+  /**
+   * Shots taken. Q70 escalates behaviour with this; nothing raises it until
+   * the gun exists in Step 7.
+   */
+  hits: number;
+
+  /** False while dead. Q57 returns it from the lair after CREATURE_RESPAWN_SEC. */
+  alive: boolean;
+  respawnSec: number;
+
+  /** The standing order from the director. */
+  order: CreatureOrder;
 }

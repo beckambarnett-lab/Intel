@@ -4,7 +4,14 @@ import {
   canSee,
   lanternRadius,
 } from '@ember/shared';
-import type { FireView, Player, PlayerId, WorldItem, WorldState } from '@ember/shared';
+import type {
+  CreatureView,
+  FireView,
+  Player,
+  PlayerId,
+  WorldItem,
+  WorldState,
+} from '@ember/shared';
 
 /**
  * The fire as this player may see it.
@@ -187,6 +194,48 @@ export class VisibilityIndex {
           canSee(world.grid, viewer.pos, LIT_FIGURE_VISIBLE_M, tree.pos));
 
       if (lit) out.push({ x: tree.tx, y: tree.ty });
+    }
+
+    return out;
+  }
+
+  /**
+   * The creatures this player may receive.
+   *
+   * The same predicate as players and items, and that is the point: a creature
+   * stalking you from outside your lantern is not culled *for effect*, it is
+   * culled because the client is never told anything it cannot see. Open the
+   * websocket log while one is hunting you and there is nothing in it — which
+   * is the only reason the dark is frightening rather than decorative.
+   */
+  visibleCreaturesTo(world: WorldState, viewerId: PlayerId, nowMs: number): CreatureView[] {
+    const viewer = world.players[viewerId];
+    if (!viewer) return [];
+
+    const out: CreatureView[] = [];
+    const lantern = lanternRadius(viewer.lantern);
+    const fire = world.fire;
+
+    for (const id of Object.keys(world.creatures)) {
+      const c = world.creatures[id];
+      if (!c || !c.alive) continue;
+
+      const key = `${viewerId}|creature:${id}`;
+      const lit =
+        canSee(world.grid, viewer.pos, lantern, c.pos) ||
+        (canSee(world.grid, fire.pos, fire.lightRadiusM, c.pos) &&
+          canSee(world.grid, viewer.pos, LIT_FIGURE_VISIBLE_M, c.pos));
+
+      if (lit) {
+        this.lastSeenAt.set(key, nowMs);
+        out.push({ id: c.id, pos: { ...c.pos }, state: c.state });
+        continue;
+      }
+
+      const last = this.lastSeenAt.get(key);
+      if (last !== undefined && nowMs - last < VISIBILITY_HYSTERESIS_MS) {
+        out.push({ id: c.id, pos: { ...c.pos }, state: c.state });
+      }
     }
 
     return out;

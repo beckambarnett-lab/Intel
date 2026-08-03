@@ -361,6 +361,115 @@ export const SOUND_RADIUS_M = {
   gunshot: 60,
 } as const;
 
+/**
+ * Below this the movement is not movement. Guards against a hair of residual
+ * velocity, or a player pinned against rock, registering as footfalls — Q58
+ * makes standing still *truly* inaudible, and "almost silent" is a different
+ * and much worse mechanic.
+ */
+export const SOUND_MOVING_EPSILON_MPS = 0.05;
+
+/** A creature's sniff while hunting, and its growl on a state change (Q69). */
+export const SOUND_RADIUS_SNIFF_M = 12;
+export const SOUND_RADIUS_GROWL_M = 20;
+
+// ---------------------------------------------------------------------------
+// Creatures (§8, Q56–Q65)
+// ---------------------------------------------------------------------------
+
+export const CREATURE_COUNT = 4; // Q56
+export const CREATURE_RESPAWN_SEC = 300; // Q57 — killed creatures return from the lair
+
+/** Speed as a multiple of an unloaded player's walk (Q61). */
+export const CREATURE_PATROL_SPEED_MULT = 0.9;
+export const CREATURE_PURSUE_SPEED_MULT = 1.15;
+
+/** Body radius for collision. Slightly wider than a player. */
+export const CREATURE_RADIUS = 0.4;
+
+/** Close enough to kill you (Q62). */
+export const CREATURE_CONTACT_M = 0.9;
+
+/** Close enough to consider a destination reached. */
+export const CREATURE_ARRIVE_M = 1.2;
+
+/**
+ * How long it keeps coming after your light goes out (Q60: Investigate).
+ *
+ * This number is the whole "kill your light and they lose you" mechanic (L12).
+ * Too short and hooding is a get-out-of-jail button; too long and it is not a
+ * counter at all. It should feel like it takes nerve to hold still.
+ */
+export const CREATURE_LIGHT_MEMORY_SEC = 6;
+
+/** How long it will search a sound before giving up on it (Q60: Hunt). */
+export const CREATURE_SOUND_MEMORY_SEC = 8;
+
+/** Seconds spent casting about at a lost trail before returning to patrol. */
+export const CREATURE_INVESTIGATE_SEC = 5;
+
+/**
+ * How far off a player counts as seen when they are standing in firelight.
+ *
+ * Q59 keys light detection to the lantern stage (Q37), which alone would make
+ * standing at the bonfire with a hooded lantern nearly invisible — the exact
+ * opposite of what a fire is. A body lit by a fire is a body you can see.
+ */
+export const CREATURE_SEES_FIRELIT_M = 30;
+
+/** Sabotage (Q24): seconds to scatter the pile, and how far the logs fly. */
+export const CREATURE_SABOTAGE_SEC = 3;
+export const CREATURE_SABOTAGE_THROW_M = 6;
+
+/** Logs and branches hurled per scatter. */
+export const CREATURE_SABOTAGE_TAKE = 4;
+
+/** Seconds between sniffs while hunting (Q69). */
+export const CREATURE_SNIFF_MIN_SEC = 2;
+export const CREATURE_SNIFF_MAX_SEC = 4;
+
+/**
+ * Hits before it turns Desperate (Q70: 3–4 is frenzied).
+ *
+ * Nothing raises `hits` yet — the gun arrives in Step 7. The state is here
+ * because Q60's list is the state machine's contract, and a switch missing one
+ * of its arms is a switch that gets bolted on badly later.
+ */
+export const CREATURE_DESPERATE_HITS = 3;
+
+/** Desperate is faster and much louder than anything else it does (Q70). */
+export const CREATURE_DESPERATE_SPEED_MULT = 1.35;
+export const CREATURE_DESPERATE_NOISE_MULT = 2.5;
+
+/** How far outside its assigned zone it will drift before heading back (Q60: Return). */
+export const CREATURE_ZONE_SLACK_M = 60;
+
+/** How close to camp it has to be to consider sieging it (Q60: Siege). */
+export const CREATURE_SIEGE_RANGE_M = 40;
+
+/** Seconds a patrol holds one wander point before picking another. */
+export const CREATURE_PATROL_REPICK_SEC = 7;
+
+/** Seed for creature behaviour. Deterministic — the sim never calls Math.random. */
+export const CREATURE_RNG_SEED = 0x5eed;
+
+// ---------------------------------------------------------------------------
+// The scripted director (§21 Step 6.5, Q117)
+//
+// Ships permanently as the LLM failure path. The game must play correctly with
+// the API key removed entirely, which means this is not a placeholder.
+// ---------------------------------------------------------------------------
+
+/** How often it reconsiders assignments, in seconds. Q111 puts the LLM at 12. */
+export const DIRECTOR_REASSIGN_SEC = 12;
+
+/**
+ * Zones the scripted director will send creatures to, in the order it fills
+ * them. Weighted toward the near wood because that is where players are for
+ * most of a run — a patrol in the lair menaces nobody.
+ */
+export const DIRECTOR_PATROL_ZONES = ['nearWood', 'ruins', 'nearWood', 'deepWood'] as const;
+
 // ---------------------------------------------------------------------------
 // World (§14)
 // ---------------------------------------------------------------------------
