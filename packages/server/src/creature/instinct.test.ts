@@ -11,12 +11,20 @@ import {
 } from '@ember/shared';
 import type { InputFrame, LanternStage, SimHooks, WorldState } from '@ember/shared';
 import { step } from '@ember/shared';
-import { creatureAct, killCreature } from './instinct.js';
-import { creatureSense } from './senses.js';
+import { killCreature } from './instinct.js';
+import { CreatureMind } from './mind.js';
 
-const hooks: SimHooks = { creatureSense, creatureAct };
+/**
+ * A fresh mind per world, so belief never leaks between test cases.
+ * `hooks()` is exactly what Room passes to `step()`, so these exercise the
+ * real wiring rather than a test-only arrangement of the same functions.
+ */
+let mind: CreatureMind;
+let hooks: SimHooks;
 
 function world(): WorldState {
+  mind = new CreatureMind(1);
+  hooks = mind.hooks();
   const w = createWorld(200, 60, createGrid(200, 60));
   // Fire well out of the way unless a test wants it.
   w.fire.pos = { x: 5, y: 5 };

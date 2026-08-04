@@ -39,8 +39,7 @@ import type {
 import type { WebSocket } from 'ws';
 import type { MapKind, SimHooks } from '@ember/shared';
 import { tubeCampPos } from '@ember/shared';
-import { creatureAct } from './creature/instinct.js';
-import { creatureSense } from './creature/senses.js';
+import { CreatureMind } from './creature/mind.js';
 import { VisibilityIndex, audibleCallsTo, fireViewFor } from './visibility.js';
 
 /**
@@ -80,11 +79,17 @@ export class Room {
   private readonly mapKind: MapKind;
 
   /**
+   * Everything the creatures know. Held here rather than on the world so that
+   * belief can never be cloned into a snapshot — see `CreatureMind`.
+   */
+  private readonly mind: CreatureMind;
+
+  /**
    * Stages 9 and 10. Passed to `step()` here and nowhere else — a client
    * constructs no hooks, so creature sensing and decisions simply do not exist
    * on its side of the wire. See `SimHooks` for why they are not plain stages.
    */
-  private readonly hooks: SimHooks = { creatureSense, creatureAct };
+  private readonly hooks: SimHooks;
 
   /**
    * @param mapSeed  world seed; clients rebuild identical geometry from it
@@ -104,6 +109,8 @@ export class Room {
         : createWorld(SANDBOX_WIDTH_M, SANDBOX_HEIGHT_M, gridFromMap(map));
     populateFromMap(this.world, map);
     refreshFire(this.world.fire);
+    this.mind = new CreatureMind(this.mapSeed);
+    this.hooks = this.mind.hooks();
     this.spawnCreatures();
   }
 
@@ -258,6 +265,9 @@ export class Room {
     refreshFire(this.world.fire);
     this.world.sounds = [];
     this.world.nextSoundId = 1;
+    // Belief must not survive a reset: the next run's creatures have to start
+    // knowing nothing, or the first minutes inherit the last run's search.
+    this.mind.reset();
     this.spawnCreatures();
     this.world.runSec = 0;
     this.world.outcome = null;

@@ -493,6 +493,107 @@ export const CREATURE_VOCAL_RANGE_M = {
 /** Minimum seconds between one creature's vocalizations. */
 export const CREATURE_VOCAL_COOLDOWN_SEC = 4;
 
+/**
+ * How often a creature re-thinks, in ticks. 5 ticks is 4Hz.
+ *
+ * Bodies move every tick; decisions do not. Re-scoring twenty times a second
+ * makes a creature twitch between near-equal options, and it is the twitching
+ * rather than the choices that reads as a video-game enemy. Thinking at 4Hz
+ * also leaves the belief work comfortably cheap.
+ */
+export const CREATURE_THINK_PERIOD_TICKS = 5;
+
+// ---------------------------------------------------------------------------
+// Belief (§8 — the creature's model of where you are)
+// ---------------------------------------------------------------------------
+
+/**
+ * Belief grid resolution in metres. 8m over the 1200x250 tube is 150x32 cells,
+ * about 19KB per creature — coarse enough to be free, fine enough that a peak
+ * points at a thicket rather than at a zone.
+ */
+export const BELIEF_CELL_M = 8;
+
+/** Fraction of belief surviving each second. Lower forgets faster. */
+export const BELIEF_DECAY_PER_SEC = 0.88;
+
+/**
+ * How fast belief spreads outward each second.
+ *
+ * This is the creature's model of you having moved since it last knew anything.
+ * It is why a stale contact produces a search of an area rather than a walk to
+ * a point, and why the search area grows the longer you stay hidden.
+ */
+export const BELIEF_DIFFUSE_PER_SEC = 0.4;
+
+/** Mass below this is treated as zero, so a field can actually reach empty. */
+export const BELIEF_MIN_MASS = 0.02;
+
+/** How much ground a creature clears by walking through it, in metres. */
+export const BELIEF_CHECK_RADIUS_M = 7;
+
+/** Mass added by one observation, and how far it smears, in cells. */
+export const BELIEF_MASS_LIGHT = 1;
+export const BELIEF_MASS_SOUND = 0.7;
+export const BELIEF_SPREAD_LIGHT = 1;
+export const BELIEF_SPREAD_SOUND = 2;
+
+/** How much of a caller's belief the creatures that hear it take on. */
+export const BELIEF_SUMMON_TRANSFER = 0.75;
+
+/**
+ * Belief mass a creature needs before it is willing to call the others in.
+ *
+ * Set so that a solid sighting clears it and a distant half-heard footfall does
+ * not. Summoning on scraps would have the pack constantly converging on
+ * nothing, which is both bad hunting and — because a call gives away where the
+ * caller is — a straightforward gift to the player.
+ */
+export const BELIEF_SUMMON_THRESHOLD = 0.9;
+
+// ---------------------------------------------------------------------------
+// Utility scoring (§8 — how a creature picks what to do)
+// ---------------------------------------------------------------------------
+
+/** Base pull of a live contact, of a believed position, and of home. */
+export const UTILITY_PURSUE = 10;
+export const UTILITY_SEARCH = 4;
+export const UTILITY_PATROL = 1;
+
+/**
+ * How far apart creatures prefer to stay, and how hard they push.
+ *
+ * Four hunters that pile onto the same point cover a quarter as much ground and
+ * read as one animal with four bodies. Spacing is what makes them a pack.
+ */
+export const UTILITY_SPACING_M = 30;
+export const UTILITY_SPACING_WEIGHT = 3;
+
+/**
+ * Pull toward camp as the fire fails.
+ *
+ * Zero while the fire is healthy — the perimeter holds anyway (Q7), so crowding
+ * it would just park four creatures at the edge of the light looking silly.
+ * As it drops they start to lean in, which is the siege arriving on its own
+ * without anything having scripted it.
+ */
+export const UTILITY_SIEGE = 6;
+
+// ---------------------------------------------------------------------------
+// Personality (§8 — hidden per-creature variation)
+// ---------------------------------------------------------------------------
+
+/**
+ * Each creature is seeded with small hidden traits, in 0..1.
+ *
+ * Never shown to the player and never sent over the wire. The point is not that
+ * anyone reads them off, but that four hunters stop being interchangeable: one
+ * that gives up early and one that will not let go are different problems, and
+ * learning which is which across a run is the kind of knowledge that makes a
+ * wood feel inhabited rather than populated.
+ */
+export const PERSONALITY_SPREAD = 0.35;
+
 // ---------------------------------------------------------------------------
 // World (§14)
 // ---------------------------------------------------------------------------

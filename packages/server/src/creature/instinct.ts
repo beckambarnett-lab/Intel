@@ -1,59 +1,146 @@
 import {
+  BELIEF_SUMMON_THRESHOLD,
   CREATURE_ARRIVE_M,
   CREATURE_CHARGE_RANGE_M,
   CREATURE_HEALTH,
   CREATURE_KILL_RANGE_M,
   CREATURE_RADIUS,
   CREATURE_RESPAWN_SEC,
+  FIRE_CAPACITY,
+  FIRE_PERIMETER_MIN_FRAC,
+  UTILITY_PATROL,
+  UTILITY_PURSUE,
+  UTILITY_SEARCH,
+  UTILITY_SIEGE,
+  UTILITY_SPACING_M,
+  UTILITY_SPACING_WEIGHT,
   bodyBlocked,
-  moveCreatures,
   mulberry32,
   vocalize,
 } from '@ember/shared';
-import type { Creature, Vec2, WorldState } from '@ember/shared';
+import type { Creature, Stance, Vec2, WorldState } from '@ember/shared';
+import { bestSearchTarget, markChecked, totalBelief } from './belief.js';
+import type { BeliefField } from './belief.js';
+import type { Personality } from './personality.js';
 
 /**
- * Tick stage 10 — tier one, instinct.
+ * Tier one — instinct.
  *
- * What a creature does when nothing smarter is telling it anything. This is the
- * layer that has to carry the game on its own: the director can be slow, can be
- * rate-limited, can be switched off entirely with the API key removed, and the
- * creatures still have to be frightening. DESIGN.md Step 6 is blunt about it —
- * if they are not frightening on a script, no language model will save them.
+ * What a creature does when nothing smarter is telling it anything, which has
+ * to include the case where nothing smarter ever will. The director can be
+ * slow, rate-limited, or absent entirely with the API key removed, and the game
+ * still has to work; DESIGN.md Step 6 is blunt that creatures which are not
+ * frightening on their own will not be rescued by a language model.
  *
- * Right now this is deliberately thin: seek the last thing you sensed, sweep
- * when you have nothing. That is enough to make hooding your lantern and
- * standing still the correct play, which is the behaviour Step 6's gate asks
- * for, and it is the seam the belief field and utility scoring drop into next.
- * The tiers above will write goals and stances into the same fields this does,
- * so nothing downstream has to change when they arrive.
+ * The shape is utility scoring rather than a state machine, and that choice is
+ * the point. An eight-state priority switch flips on thresholds, and threshold
+ * flipping is what produces the twitchy snapping that reads as a video game
+ * enemy from twenty years ago. Scoring a handful of options and taking the best
+ * gives behaviour that shades between intentions instead of jumping between
+ * them: a creature drifts off a cold trail rather than abandoning it on a
+ * frame, and leans toward a failing camp rather than switching to Siege Mode.
+ *
+ * Every option is scored against the creature's own belief field, so nothing
+ * here can consult a truth the creature has not earned.
  */
 
-/** Stable per-creature seed. Never Math.random — the sim must be replayable. */
-function seedFor(creature: Creature, world: WorldState): number {
+export interface Mind {
+  belief: BeliefField;
+  personality: Personality;
+}
+
+type OptionKind = 'pursue' | 'search' | 'patrol' | 'siege';
+
+interface Option {
+  kind: OptionKind;
+  goal: Vec2;
+  stance: Stance;
+  score: number;
+}
+
+function dist(a: Vec2, b: Vec2): number {
+  return Math.hypot(b.x - a.x, b.y - a.y);
+}
+
+/**
+ * How crowded a destination is.
+ *
+ * Applied to every option so that four creatures never converge on one point
+ * unless the pull there is overwhelming. Without it they clump, cover a quarter
+ * of the ground, and read as a single animal with four bodies; with it they
+ * spread out and the wood feels occupied. Independence scales how much a
+ * particular creature minds the company.
+ */
+function crowding(world: WorldState, self: Creature, goal: Vec2, independence: number): number {
+  let penalty = 0;
+
+  for (const id of Object.keys(world.creatures)) {
+    if (id === self.id) continue;
+    const other = world.creatures[id];
+    if (!other || !other.alive) continue;
+
+    const d = dist(goal, other.pos);
+    if (d >= UTILITY_SPACING_M) continue;
+    penalty += (1 - d / UTILITY_SPACING_M) * UTILITY_SPACING_WEIGHT * independence;
+  }
+
+  return penalty;
+}
+
+/** Chasing something it can currently sense, or recently could. */
+function pursueOption(world: WorldState, creature: Creature, mind: Mind): Option | null {
+  const contact = creature.contact;
+  if (!contact) return null;
+
+  const range = dist(creature.pos, contact.pos);
+  const sensingNow = contact.tick === world.tick;
+
+  // Arrived at a memory and found nothing there. Handled by the caller as a
+  // state change; here it simply stops being an option worth scoring.
+  if (!sensingNow && range <= CREATURE_ARRIVE_M) return null;
+
+  const { aggression } = mind.personality;
+
+  // Committing is loud (Q69), and that is the trade: the moment it decides to
+  // take you, you can hear it decide. A more aggressive creature commits from
+  // further out.
+  const chargeRange = CREATURE_CHARGE_RANGE_M * (0.6 + 0.8 * aggression);
+  const stance: Stance =
+    range <= chargeRange && contact.via === 'light' ? 'charge' : 'stalk';
+
+  const score = UTILITY_PURSUE * contact.confidence * (0.7 + 0.6 * aggression);
+
+  return { kind: 'pursue', goal: { ...contact.pos }, stance, score };
+}
+
+/** Working the belief field — the behaviour that reads as searching. */
+function searchOption(world: WorldState, creature: Creature, mind: Mind): Option | null {
+  const target = bestSearchTarget(mind.belief, creature.pos, world.tick);
+  if (!target) return null;
+
+  const { patience } = mind.personality;
+  const score = UTILITY_SEARCH * Math.min(1, target.mass) * (0.6 + 0.8 * patience);
+
+  return { kind: 'search', goal: target.pos, stance: 'sweep', score };
+}
+
+const SWEEP_RADIUS_M = 26;
+const SWEEP_ATTEMPTS = 10;
+
+/** Casting about near home, for when the creature knows nothing at all. */
+function patrolOption(world: WorldState, creature: Creature): Option {
+  // Only reroll on arrival, so a creature commits to a direction instead of
+  // picking a fresh one every time it thinks.
+  if (creature.goal && dist(creature.pos, creature.goal) > CREATURE_ARRIVE_M) {
+    return { kind: 'patrol', goal: creature.goal, stance: 'sweep', score: UTILITY_PATROL };
+  }
+
   let h = 2166136261;
   for (let i = 0; i < creature.id.length; i++) {
     h ^= creature.id.charCodeAt(i);
     h = Math.imul(h, 16777619);
   }
-  // Only changes when a new wander is actually needed, so a creature commits to
-  // a direction instead of jittering a fresh one every tick.
-  return (h ^ Math.imul(world.tick, 2654435761)) >>> 0;
-}
-
-/** How far a sweep casts about from the anchor, in metres. */
-const SWEEP_RADIUS_M = 26;
-const SWEEP_ATTEMPTS = 10;
-
-/**
- * Somewhere plausible to look next.
- *
- * Biased around the creature's anchor rather than its current position, so a
- * creature that has drifted a long way chasing something works its way back
- * instead of wandering off the end of the map.
- */
-function wanderGoal(world: WorldState, creature: Creature): Vec2 {
-  const rand = mulberry32(seedFor(creature, world));
+  const rand = mulberry32((h ^ Math.imul(world.tick, 2654435761)) >>> 0);
 
   for (let i = 0; i < SWEEP_ATTEMPTS; i++) {
     const angle = rand() * Math.PI * 2;
@@ -68,72 +155,121 @@ function wanderGoal(world: WorldState, creature: Creature): Vec2 {
     if (p.y > world.bounds.h - CREATURE_RADIUS) continue;
     if (bodyBlocked(world.grid, p.x, p.y, CREATURE_RADIUS)) continue;
 
-    return p;
+    return { kind: 'patrol', goal: p, stance: 'sweep', score: UTILITY_PATROL };
   }
 
-  return { ...creature.anchor };
-}
-
-function distanceTo(creature: Creature, p: Vec2): number {
-  return Math.hypot(p.x - creature.pos.x, p.y - creature.pos.y);
+  return {
+    kind: 'patrol',
+    goal: { ...creature.anchor },
+    stance: 'sweep',
+    score: UTILITY_PATROL,
+  };
 }
 
 /**
- * Choose this creature's stance and goal for the tick.
+ * Leaning on a failing camp.
  *
- * The stance is what the player actually reads — a stalk moves smoothly and
- * purposefully, a sweep arcs and doubles back — so the choice here is as much
- * a communication decision as a tactical one.
+ * Scored rather than switched, which is what stops this from being a Siege Mode
+ * that snaps on at a threshold. While the fire is healthy the pull is zero —
+ * the perimeter holds regardless (Q7), so crowding it would just park four
+ * creatures at the edge of the light looking foolish. As the fuel drops they
+ * start to drift in, and by the time the perimeter actually fails they are
+ * already there. Nothing scripts the siege; it arrives because the numbers move.
  */
-function decide(world: WorldState, creature: Creature): void {
+function siegeOption(world: WorldState, creature: Creature): Option | null {
+  const frac = world.fire.fuel / FIRE_CAPACITY;
+  // Twice the failure threshold: they start closing in well before it breaks.
+  const onset = FIRE_PERIMETER_MIN_FRAC * 2;
+  if (frac >= onset) return null;
+
+  const urgency = 1 - frac / onset;
+  const fire = world.fire.pos;
+
+  // Stand off at the perimeter while it holds; walk in once it does not.
+  const standoff = world.fire.safeRadiusM > 0 ? world.fire.safeRadiusM + 2 : 0;
+  const away = dist(creature.pos, fire) || 1;
+  const goal =
+    standoff > 0
+      ? {
+          x: fire.x + ((creature.pos.x - fire.x) / away) * standoff,
+          y: fire.y + ((creature.pos.y - fire.y) / away) * standoff,
+        }
+      : { ...fire };
+
+  return { kind: 'siege', goal, stance: 'stalk', score: UTILITY_SIEGE * urgency };
+}
+
+/**
+ * Choose a stance and a goal.
+ *
+ * Called at the tactical rate, not every tick — see CREATURE_THINK_PERIOD_TICKS
+ * for why re-deciding twenty times a second is worse than doing it four.
+ */
+export function decide(world: WorldState, creature: Creature, mind: Mind): void {
+  // Losing the trail is a state change, and it is the one the player most needs
+  // to hear: it is the sound of going dark having worked. Handled before
+  // scoring because it changes what there is to score.
   const contact = creature.contact;
-
-  if (contact) {
-    const range = distanceTo(creature, contact.pos);
-
-    /**
-     * Whether the creature is still sensing this, as opposed to walking to a
-     * memory of it. The distinction is the whole of giving up: "I arrived and
-     * found nothing" is only true if there is, in fact, nothing there now.
-     *
-     * Without it, arriving on top of a player it can plainly sense counts as
-     * losing them — the creature stops a few centimetres outside its own kill
-     * range, shrugs, and wanders off while they stand in front of it.
-     */
-    const sensingNow = contact.tick === world.tick;
-
-    // Arrival is tested FIRST, and the order is load-bearing. Checking the
-    // charge condition ahead of it lets a creature that has reached the last
-    // known position keep satisfying "close enough to charge" forever: it
-    // re-commits to a point it is already standing on, never gives up, never
-    // calls, and the counterplay quietly stops existing.
-    if (!sensingNow && range <= CREATURE_ARRIVE_M) {
-      // Got there and found nothing. The trail is cold — say so, out loud, and
-      // go back to searching. This beat is what the player earns by killing
-      // their light and going somewhere else, and it has to be audible or they
-      // never learn that it worked.
+  if (contact && contact.tick !== world.tick) {
+    if (dist(creature.pos, contact.pos) <= CREATURE_ARRIVE_M) {
       creature.contact = null;
-      creature.goal = null;
-      // Forced: this fires seconds after the `contact` call, so the ordinary
-      // cooldown would eat the one sound that tells the player they got away.
+      // Forced past the cooldown: this fires seconds after the `contact` call,
+      // and an ordinary cooldown would eat exactly the sound that matters.
       vocalize(world, creature, 'lost', true);
-    } else if (range <= CREATURE_CHARGE_RANGE_M && contact.via === 'light') {
-      // Close enough, and sure enough, to commit. Committing is loud (Q69), and
-      // that is the trade: the moment it decides to take you, you can hear it.
-      creature.stance = 'charge';
-      creature.goal = { ...contact.pos };
-      vocalize(world, creature, 'contact');
-      return;
-    } else {
-      creature.stance = 'stalk';
-      creature.goal = { ...contact.pos };
-      return;
     }
   }
 
-  creature.stance = 'sweep';
-  if (!creature.goal || distanceTo(creature, creature.goal) <= CREATURE_ARRIVE_M) {
-    creature.goal = wanderGoal(world, creature);
+  const options: Option[] = [];
+  const pursue = pursueOption(world, creature, mind);
+  if (pursue) options.push(pursue);
+
+  const search = searchOption(world, creature, mind);
+  if (search) options.push(search);
+
+  const siege = siegeOption(world, creature);
+  if (siege) options.push(siege);
+
+  options.push(patrolOption(world, creature));
+
+  const { independence } = mind.personality;
+  let best = options[0]!;
+  let bestScore = -Infinity;
+
+  for (const option of options) {
+    const score = option.score - crowding(world, creature, option.goal, independence);
+    if (score > bestScore) {
+      bestScore = score;
+      best = option;
+    }
+  }
+
+  creature.stance = best.stance;
+  creature.goal = best.goal;
+
+  /**
+   * At most one call, and the louder one wins.
+   *
+   * These share a cooldown, so emitting `contact` first would silently swallow
+   * the `summon` that follows it a line later — the same trap that once ate the
+   * `lost` call. Priority rather than forcing is the right fix here: a creature
+   * calling the pack in is already announcing that it has you, so making both
+   * noises is redundant, and forcing a summon past its cooldown would let one
+   * creature flatten the clearest signal the player gets.
+   *
+   * The summon threshold matters in both directions. Too low and the pack
+   * spends the run converging on nothing — and since a call also gives away the
+   * caller, too low is a straightforward gift to the player.
+   */
+  if (best.kind === 'pursue') {
+    const worthGathering =
+      totalBelief(mind.belief) >= BELIEF_SUMMON_THRESHOLD &&
+      mind.personality.vocality > 0.5;
+
+    if (worthGathering) {
+      vocalize(world, creature, 'summon');
+    } else if (best.stance === 'charge') {
+      vocalize(world, creature, 'contact');
+    }
   }
 }
 
@@ -141,10 +277,9 @@ function decide(world: WorldState, creature: Creature): void {
  * Contact kills (Q62).
  *
  * No downed state and no wrestling free — reaching you is the whole threat, and
- * softening it would make every other system in the game less sharp. The ghost
- * that follows is Step 8; until then this just stops you.
+ * softening it would make every other system in the game less sharp.
  */
-function resolveContact(world: WorldState): void {
+export function resolveContact(world: WorldState): void {
   for (const cid of Object.keys(world.creatures)) {
     const creature = world.creatures[cid];
     if (!creature || !creature.alive) continue;
@@ -153,7 +288,7 @@ function resolveContact(world: WorldState): void {
       const player = world.players[pid];
       if (!player || !player.alive) continue;
 
-      if (distanceTo(creature, player.pos) <= CREATURE_KILL_RANGE_M) {
+      if (dist(creature.pos, player.pos) <= CREATURE_KILL_RANGE_M) {
         player.alive = false;
         player.vel.x = 0;
         player.vel.y = 0;
@@ -162,8 +297,13 @@ function resolveContact(world: WorldState): void {
   }
 }
 
+/** Walking ground clears it. The negative-information half of searching. */
+export function recordVisit(world: WorldState, creature: Creature, mind: Mind): void {
+  markChecked(mind.belief, creature.pos, world.tick);
+}
+
 /** A killed creature walks back out of the lair after five minutes (Q57). */
-function respawn(creature: Creature): void {
+export function respawn(creature: Creature): void {
   if (creature.alive || creature.respawnSecLeft > 0) return;
 
   creature.alive = true;
@@ -173,35 +313,6 @@ function respawn(creature: Creature): void {
   creature.goal = null;
   creature.stance = 'sweep';
   creature.pos = { ...creature.anchor };
-}
-
-/**
- * Tick stage 10.
- *
- * Decisions first for every creature, then all the bodies move together. Doing
- * it in two passes rather than one keeps the tick order honest: no creature
- * gets to react to another creature's movement inside the same stage, which
- * would make behaviour depend on the iteration order of a hash map.
- */
-export function creatureAct(world: WorldState, dt: number): void {
-  for (const id of Object.keys(world.creatures)) {
-    const creature = world.creatures[id];
-    if (!creature) continue;
-
-    // Cleared at the top of the stage rather than the bottom: the snapshot is
-    // built after the tick, and a call has to survive long enough to be sent.
-    creature.vocalizing = null;
-
-    if (!creature.alive) {
-      respawn(creature);
-      continue;
-    }
-
-    decide(world, creature);
-  }
-
-  moveCreatures(world, dt);
-  resolveContact(world);
 }
 
 /** Kill a creature. Step 7 calls this from combat; exposed here for tests. */
