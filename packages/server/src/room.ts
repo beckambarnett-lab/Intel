@@ -1,6 +1,9 @@
 import {
   CREATURE_COUNT,
   CREATURE_RADIUS,
+  DIRECTOR_MAX_FAILURES,
+  TACTICIAN_MAX_CALLS_PER_RUN,
+  TACTICIAN_MIN_SPACING_MS,
   PLAYER_RADIUS,
   SANDBOX_HEIGHT_M,
   SANDBOX_MAP_SEED,
@@ -40,6 +43,8 @@ import type { WebSocket } from 'ws';
 import type { MapKind, SimHooks } from '@ember/shared';
 import { tubeCampPos } from '@ember/shared';
 import { CreatureMind } from './creature/mind.js';
+import { CallBudget } from './director/budget.js';
+import { Tactician } from './director/tactician.js';
 import { VisibilityIndex, audibleCallsTo, fireViewFor } from './visibility.js';
 
 /**
@@ -109,7 +114,17 @@ export class Room {
         : createWorld(SANDBOX_WIDTH_M, SANDBOX_HEIGHT_M, gridFromMap(map));
     populateFromMap(this.world, map);
     refreshFire(this.world.fire);
-    this.mind = new CreatureMind(this.mapSeed);
+    // The tactical tier. It disables itself when there is no API key, so this
+    // is safe to construct unconditionally — a keyless run simply plays on
+    // instinct, which is the arrangement Q117 requires.
+    const tactician = new Tactician(
+      new CallBudget({
+        maxCalls: TACTICIAN_MAX_CALLS_PER_RUN,
+        minSpacingMs: TACTICIAN_MIN_SPACING_MS,
+        maxConsecutiveFailures: DIRECTOR_MAX_FAILURES,
+      }),
+    );
+    this.mind = new CreatureMind(this.mapSeed, tactician);
     this.hooks = this.mind.hooks();
     this.spawnCreatures();
   }

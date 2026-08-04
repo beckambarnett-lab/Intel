@@ -646,6 +646,31 @@ export const PERSONALITY_SPREAD = 0.35;
  */
 export const PERCEPTION_RETENTION_SEC = 90;
 
+/**
+ * Tactical tier spend control.
+ *
+ * Event-driven rather than on a fixed cadence, so a quiet stretch of a run
+ * costs nothing at all. The cap is the backstop for a loud one: a busy chase
+ * generates contact edges continuously, and without a ceiling a single
+ * eventful minute could spend most of a run's budget.
+ *
+ * The spacing floor matters as much as the cap. Two requests in flight at once
+ * would race to install contradictory orders onto the same creatures, so the
+ * budget refuses to start one while another is outstanding.
+ */
+export const TACTICIAN_MAX_CALLS_PER_RUN = 250;
+export const TACTICIAN_MIN_SPACING_MS = 1500;
+
+/**
+ * Consecutive failures before a director tier is switched off for the run
+ * (Q117).
+ *
+ * Permanent rather than retried, because a director that flickers in and out is
+ * worse than one that is simply absent — half the run behaves one way and half
+ * another, and no playtest of that means anything.
+ */
+export const DIRECTOR_MAX_FAILURES = 3;
+
 // ---------------------------------------------------------------------------
 // World (§14)
 // ---------------------------------------------------------------------------

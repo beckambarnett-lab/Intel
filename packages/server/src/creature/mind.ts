@@ -21,6 +21,10 @@ import {
   injectBelief,
   markChecked,
 } from './belief.js';
+import { CallBudget } from '../director/budget.js';
+import { followOrder } from '../director/orders.js';
+import { Tactician } from '../director/tactician.js';
+import type { ValidatedOrderSet } from '../director/schema.js';
 import { decide, progressSabotage, resolveContact, respawn } from './instinct.js';
 import type { Mind } from './instinct.js';
 import { personalityFor } from './personality.js';
@@ -45,12 +49,36 @@ export class CreatureMind {
   private minds = new Map<CreatureId, Mind>();
   private readonly perception = new PerceptionLog();
 
-  constructor(private readonly runSeed: number) {}
+  /**
+   * The tactical tier. Null in tests and headless harnesses that want pure
+   * instinct — and, in practice, on any run without an API key, since the
+   * Tactician disables its own budget in that case (Q117).
+   */
+  private readonly tactician: Tactician | null;
+
+  /** Set when something worth re-planning has happened. */
+  private eventPending = false;
+
+  /** Which creatures had a contact last tick, for edge detection. */
+  private hadContact = new Set<CreatureId>();
+
+  /** The strategist's standing plan. Wired in stage 5; null until then. */
+  private plan: string | null = null;
+
+  constructor(
+    private readonly runSeed: number,
+    tactician: Tactician | null = null,
+  ) {
+    this.tactician = tactician;
+  }
 
   /** Fresh minds for a fresh run. Belief must never survive a reset. */
   reset(): void {
     this.minds.clear();
     this.perception.clear();
+    this.hadContact.clear();
+    this.eventPending = false;
+    this.plan = null;
   }
 
   private mindFor(world: WorldState, id: CreatureId): Mind {
@@ -59,6 +87,7 @@ export class CreatureMind {
       mind = {
         belief: createBelief(world.bounds.w, world.bounds.h),
         personality: personalityFor(id, this.runSeed),
+        standing: null,
       };
       this.minds.set(id, mind);
     }
@@ -127,7 +156,95 @@ export class CreatureMind {
         }
       }
     }
+
+    this.detectEvents(world);
   }
+
+  /**
+   * Notice the moments worth re-planning around.
+   *
+   * Edges, not levels: a creature gaining a contact or losing one. Calling on
+   * every tick where a contact merely *exists* would fire continuously through
+   * a chase, which is both expensive and useless — the plan does not change
+   * because the chase is still going. Most windows of a run produce no event at
+   * all, and that is the intended behaviour rather than a gap: a director with
+   * nothing to decide should not be asked to decide anything.
+   */
+  private detectEvents(world: WorldState): void {
+    for (const id of Object.keys(world.creatures)) {
+      const creature = world.creatures[id];
+      if (!creature) continue;
+
+      const has = creature.alive && creature.contact !== null;
+      const had = this.hadContact.has(id);
+
+      if (has !== had) this.eventPending = true;
+      if (has) this.hadContact.add(id);
+      else this.hadContact.delete(id);
+    }
+  }
+
+  /**
+   * Fire a request for orders, if anything warrants one and the budget allows.
+   *
+   * Deliberately not awaited. The simulation continues on instinct while the
+   * model thinks, and orders are picked up whenever they land — a slow model
+   * costs the pack cleverness, never frames.
+   */
+  private maybeRequestOrders(): void {
+    const tactician = this.tactician;
+    if (!tactician || !this.eventPending) return;
+
+    const now = Date.now();
+    if (!tactician.budget.mayCall(now)) return;
+
+    this.eventPending = false;
+    tactician.budget.start(now);
+
+    const snapshot = this.perception.snapshot();
+    void tactician
+      .requestOrders(snapshot, this.plan)
+      .then((result) => {
+        if (result) this.installOrders(result.orderSet);
+      })
+      .catch(() => {
+        // requestOrders already reported to the budget; nothing further to do
+        // but keep playing.
+      });
+  }
+
+  /**
+   * Install validated orders onto the creatures they name.
+   *
+   * Writes only to server-side minds, never to the world, which is why it is
+   * safe to run between ticks: there is no simulation state here to race.
+   * Orders for creatures that no longer exist are dropped silently — the roster
+   * can change while a request is in flight.
+   */
+  private installOrders(orderSet: ValidatedOrderSet): void {
+    for (const order of orderSet.orders) {
+      const mind = this.minds.get(order.creatureId);
+      if (!mind) continue;
+
+      mind.standing = {
+        order,
+        issuedTick: this.lastTick,
+        sprung: false,
+        called: false,
+      };
+    }
+
+    if (orderSet.intent) this.intentLog.push({ tick: this.lastTick, intent: orderSet.intent });
+  }
+
+  /** Per-plan reasoning, for the post-run enemy diary (Q116/Q134). */
+  private readonly intentLog: { tick: number; intent: string }[] = [];
+
+  get diary(): readonly { tick: number; intent: string }[] {
+    return this.intentLog;
+  }
+
+  private lastTick = 0;
 
   /**
    * Tick stage 15 — assemble the per-tick digest.
@@ -201,15 +318,28 @@ export class CreatureMind {
         continue;
       }
 
-      if (thinking) decide(world, creature, this.mindFor(world, id));
+      if (!thinking) continue;
+
+      const mind = this.mindFor(world, id);
+
+      // Orders first, instinct as the fallback. An expired order is dropped
+      // rather than clung to, so a creature whose instructions have run out
+      // thinks for itself instead of standing there waiting for more.
+      if (mind.standing && followOrder(world, creature, mind.belief, mind.standing)) continue;
+      mind.standing = null;
+
+      decide(world, creature, mind);
     }
 
+    this.lastTick = world.tick;
     this.propagateCalls(world);
     moveCreatures(world, dt);
     // After the bodies move, so progress reflects where a creature actually
     // ended up rather than where it meant to go.
     progressSabotage(world, dt);
     resolveContact(world);
+
+    this.maybeRequestOrders();
   }
 
   /**

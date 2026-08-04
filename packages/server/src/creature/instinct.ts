@@ -27,6 +27,7 @@ import {
 } from '@ember/shared';
 import type { Creature, ItemKind, Stance, Vec2, WorldState } from '@ember/shared';
 import { bestSearchTarget, markChecked, totalBelief } from './belief.js';
+import type { StandingOrder } from '../director/orders.js';
 import type { BeliefField } from './belief.js';
 import type { Personality } from './personality.js';
 
@@ -54,6 +55,15 @@ import type { Personality } from './personality.js';
 export interface Mind {
   belief: BeliefField;
   personality: Personality;
+  /**
+   * The order this creature is currently under, if any.
+   *
+   * Null is the normal, healthy state — the director issues orders sparingly,
+   * and a creature without one runs on the instinct in this file. That is the
+   * arrangement Q117 requires: losing the director costs the pack its
+   * inventiveness and nothing else.
+   */
+  standing: StandingOrder | null;
 }
 
 type OptionKind = 'pursue' | 'search' | 'patrol' | 'siege' | 'sabotage';
