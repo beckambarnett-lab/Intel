@@ -8,9 +8,19 @@ import {
   CREATURE_VOCAL_RANGE_M,
   TICK_DT,
   moveCreatures,
+  raycastLOS,
 } from '@ember/shared';
 import type { CreatureId, SimHooks, WorldState } from '@ember/shared';
-import { ageBelief, blendBelief, createBelief, injectBelief, markChecked } from './belief.js';
+import { PerceptionLog } from '../director/perception.js';
+import type { CreatureReport } from '../director/perception.js';
+import {
+  ageBelief,
+  bestSearchTarget,
+  blendBelief,
+  createBelief,
+  injectBelief,
+  markChecked,
+} from './belief.js';
 import { decide, resolveContact, respawn } from './instinct.js';
 import type { Mind } from './instinct.js';
 import { personalityFor } from './personality.js';
@@ -33,12 +43,14 @@ import { creatureSense } from './senses.js';
  */
 export class CreatureMind {
   private minds = new Map<CreatureId, Mind>();
+  private readonly perception = new PerceptionLog();
 
   constructor(private readonly runSeed: number) {}
 
   /** Fresh minds for a fresh run. Belief must never survive a reset. */
   reset(): void {
     this.minds.clear();
+    this.perception.clear();
   }
 
   private mindFor(world: WorldState, id: CreatureId): Mind {
@@ -94,8 +106,76 @@ export class CreatureMind {
           (light ? BELIEF_MASS_LIGHT : BELIEF_MASS_SOUND) * contact.confidence,
           light ? BELIEF_SPREAD_LIGHT : BELIEF_SPREAD_SOUND,
         );
+
+        // The director's log is written here, at the moment of sensing, and
+        // nowhere else (Q113). Everything the commander will ever know enters
+        // the system on this line — which is what makes the boundary a property
+        // of the code's shape rather than a rule somebody has to remember.
+        const observation = {
+          pos: { ...contact.pos },
+          tick: world.tick,
+          by: creature.id,
+        };
+        if (light) {
+          this.perception.recordLight({ ...observation, brightness: contact.confidence });
+        } else {
+          this.perception.recordSound({
+            ...observation,
+            loudness: contact.confidence * 60,
+            kind: 'footfall',
+          });
+        }
       }
     }
+  }
+
+  /**
+   * Tick stage 15 — assemble the per-tick digest.
+   *
+   * Observations were written as they were sensed; this records the settled
+   * state around them: who is left, what they believe, and whether anybody can
+   * currently see the fire.
+   */
+  writePerception(world: WorldState, _dt: number): void {
+    const reports: CreatureReport[] = [];
+
+    for (const id of Object.keys(world.creatures)) {
+      const creature = world.creatures[id];
+      if (!creature) continue;
+
+      const mind = this.mindFor(world, id);
+      const peak = creature.alive
+        ? bestSearchTarget(mind.belief, creature.pos, world.tick)
+        : null;
+
+      reports.push({
+        id,
+        pos: { ...creature.pos },
+        health: creature.health,
+        stance: creature.stance,
+        alive: creature.alive,
+        believes: peak ? { pos: { ...peak.pos }, mass: peak.mass } : null,
+      });
+    }
+
+    this.perception.setCreatures(reports);
+    this.perception.setClock(world.tick, world.runSec);
+
+    // The fire's tier is worth a great deal — it is the run's clock — so it has
+    // to be earned by having something standing where it can see the flame
+    // (Q113), not read off the simulation.
+    const canSeeCamp = Object.keys(world.creatures).some((id) => {
+      const creature = world.creatures[id];
+      return !!creature && creature.alive && raycastLOS(world.grid, creature.pos, world.fire.pos);
+    });
+    this.perception.setFireTier(canSeeCamp ? world.fire.tier : null);
+
+    this.perception.prune();
+  }
+
+  /** The director's view. Read-only, and the only thing Step 10 may consume. */
+  get log(): PerceptionLog {
+    return this.perception;
   }
 
   /**
@@ -162,11 +242,12 @@ export class CreatureMind {
     }
   }
 
-  /** The two server-only stages, bound to this instance. */
+  /** The three server-only stages, bound to this instance. */
   hooks(): SimHooks {
     return {
       creatureSense: (world, dt) => this.sense(world, dt),
       creatureAct: (world, dt) => this.act(world, dt),
+      writePerception: (world, dt) => this.writePerception(world, dt),
     };
   }
 }

@@ -37,6 +37,13 @@ export interface SimHooks {
   creatureSense?(world: WorldState, dt: number): void;
   /** Stage 10 — choose stances and goals, then advance the bodies. */
   creatureAct?(world: WorldState, dt: number): void;
+  /**
+   * Stage 15 — append to the director's perception log.
+   *
+   * Last, deliberately: it records what the tick turned out to be, so a
+   * commander reading it sees a settled world rather than one mid-resolution.
+   */
+  writePerception?(world: WorldState, dt: number): void;
 }
 
 /**
@@ -58,7 +65,7 @@ export interface SimHooks {
  *   12 ghosts             corpse decay, sacrifice ritual        [Step 8]
  *   13 crafting           station progress                     [Step 9]
  *   14 winLose            amulet home / embers dead / all dead  [Step 3] embers only
- *   15 writePerception    append to PerceptionLog (server only) [Step 10]
+ *   15 writePerception    append to PerceptionLog (server only) [Step 6] server hook
  *
  * MUST be deterministic: no Math.random, no Date.now, no iteration over
  * insertion-ordered structures that differ between client and server. The client
@@ -82,6 +89,7 @@ export function step(
   hooks?.creatureSense?.(world, dt); // 9
   hooks?.creatureAct?.(world, dt); // 10
   winLose(world); // 14
+  hooks?.writePerception?.(world, dt); // 15
   world.tick++;
 }
 

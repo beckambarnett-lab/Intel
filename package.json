@@ -13,13 +13,16 @@
     "dev:client": "npm run dev --workspace @ember/client",
     "build": "npm run build --workspace @ember/client",
     "typecheck": "tsc --build",
+    "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "concurrently": "^9.1.0",
+    "eslint": "^9.39.5",
     "typescript": "^5.7.2",
+    "typescript-eslint": "^8.66.0",
     "vitest": "^4.1.10"
   }
 }

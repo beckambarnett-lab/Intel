@@ -595,6 +595,20 @@ export const UTILITY_SIEGE = 6;
 export const PERSONALITY_SPREAD = 0.35;
 
 // ---------------------------------------------------------------------------
+// Director perception (§15, Q113 / Q118)
+// ---------------------------------------------------------------------------
+
+/**
+ * How long an observation stays in the director's log, in seconds.
+ *
+ * Two jobs at once. It keeps the dynamic prompt block small (Q118), and more
+ * importantly it means the director's picture of the world goes stale the way
+ * the pack's does — a commander still reasoning about a light seen three
+ * minutes ago is reasoning about a player who has long since moved.
+ */
+export const PERCEPTION_RETENTION_SEC = 90;
+
+// ---------------------------------------------------------------------------
 // World (§14)
 // ---------------------------------------------------------------------------
 
