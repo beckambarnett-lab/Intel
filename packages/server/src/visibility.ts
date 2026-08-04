@@ -2,9 +2,54 @@ import {
   LIT_FIGURE_VISIBLE_M,
   VISIBILITY_HYSTERESIS_MS,
   canSee,
+  heard,
   lanternRadius,
 } from '@ember/shared';
-import type { FireView, Player, PlayerId, WorldItem, WorldState } from '@ember/shared';
+import type {
+  CallEvent,
+  Creature,
+  CreatureView,
+  FireView,
+  Player,
+  PlayerId,
+  WorldItem,
+  WorldState,
+} from '@ember/shared';
+
+/** Strip a creature down to what looking at it would tell you. */
+function viewOf(creature: Creature): CreatureView {
+  return {
+    id: creature.id,
+    pos: { ...creature.pos },
+    facing: creature.facing,
+    stance: creature.stance,
+    alive: creature.alive,
+  };
+}
+
+/**
+ * Calls this player was in earshot of this tick.
+ *
+ * Deliberately not gated on sight. Hearing something call from somewhere out in
+ * the dark, and then hearing it answered from two other directions, is the
+ * clearest read the player ever gets on what the pack is doing — and it works
+ * at eighty metres through solid rock, which nothing visual does.
+ */
+export function audibleCallsTo(world: WorldState, viewer: Player): CallEvent[] {
+  const out: CallEvent[] = [];
+
+  for (const sound of world.sounds) {
+    if (sound.kind !== 'call') continue;
+    if (!heard(sound, viewer.pos)) continue;
+
+    const creature = world.creatures[sound.sourceId];
+    if (!creature || !creature.vocalizing) continue;
+
+    out.push({ kind: creature.vocalizing, pos: { ...sound.pos } });
+  }
+
+  return out;
+}
 
 /**
  * The fire as this player may see it.
@@ -187,6 +232,53 @@ export class VisibilityIndex {
           canSee(world.grid, viewer.pos, LIT_FIGURE_VISIBLE_M, tree.pos));
 
       if (lit) out.push({ x: tree.tx, y: tree.ty });
+    }
+
+    return out;
+  }
+
+  /**
+   * The creatures this player may receive, as views rather than as creatures.
+   *
+   * Same test as everything else: your light, or the fire's light plus a line
+   * to it. What differs is what gets built at the end — a `CreatureView`, never
+   * the `Creature` itself, because the full struct carries where that creature
+   * last sensed somebody and that is a position belonging to another player.
+   *
+   * Dead creatures are dropped entirely rather than sent with `alive: false`.
+   * A corpse you cannot see is not something you should be able to count, and
+   * knowing three of the four are down is a fact worth hiding.
+   */
+  visibleCreaturesTo(world: WorldState, viewerId: PlayerId, nowMs: number): CreatureView[] {
+    const viewer = world.players[viewerId];
+    if (!viewer) return [];
+
+    const out: CreatureView[] = [];
+    const lantern = lanternRadius(viewer.lantern);
+    const fire = world.fire;
+
+    for (const id of Object.keys(world.creatures)) {
+      const creature = world.creatures[id];
+      if (!creature || !creature.alive) continue;
+
+      const key = `${viewerId}|creature:${id}`;
+      const lit =
+        canSee(world.grid, viewer.pos, lantern, creature.pos) ||
+        (canSee(world.grid, fire.pos, fire.lightRadiusM, creature.pos) &&
+          canSee(world.grid, viewer.pos, LIT_FIGURE_VISIBLE_M, creature.pos));
+
+      if (lit) {
+        this.lastSeenAt.set(key, nowMs);
+        out.push(viewOf(creature));
+        continue;
+      }
+
+      // Hysteresis, same as players: a creature crossing the edge of your light
+      // should not strobe. It only ever extends something you already saw.
+      const last = this.lastSeenAt.get(key);
+      if (last !== undefined && nowMs - last < VISIBILITY_HYSTERESIS_MS) {
+        out.push(viewOf(creature));
+      }
     }
 
     return out;

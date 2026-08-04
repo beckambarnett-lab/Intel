@@ -1,5 +1,5 @@
 import { PLAYER_CREEP_MULT, PLAYER_RADIUS, PLAYER_SPRINT_MULT, PLAYER_WALK_SPEED } from '../constants.js';
-import { isBlockedAt } from '../grid.js';
+import { bodyBlocked } from '../grid.js';
 import { clamp, clampToUnit } from '../math.js';
 import type { TickInputs, WorldState } from '../types.js';
 import { canSprint } from './weight.js';
@@ -49,6 +49,14 @@ export function integrate(world: WorldState, dt: number): void {
     const player = world.players[id];
     if (!player) continue;
 
+    // The dead do not walk. Step 8 gives them a ghost body that moves at 80%
+    // through obstacles (Q78); until then being caught simply stops you.
+    if (!player.alive) {
+      player.vel.x = 0;
+      player.vel.y = 0;
+      continue;
+    }
+
     const intent = player.intent;
 
     // speedMul comes from stage 2, which has already seen this tick's load.
@@ -70,19 +78,7 @@ export function integrate(world: WorldState, dt: number): void {
   }
 }
 
-/**
- * Would a body of PLAYER_RADIUS centred here overlap solid rock?
- *
- * Tested at the four extremes of the body rather than at its centre: a 0.35m
- * radius against 1m tiles means a centre-only test lets you stand half inside
- * a trunk, and half inside a trunk is where you get stuck.
- */
+/** Shared with creatures so the two can never disagree about what fits where. */
 function blockedForBody(world: WorldState, x: number, y: number): boolean {
-  const r = PLAYER_RADIUS;
-  return (
-    isBlockedAt(world.grid, x - r, y - r) ||
-    isBlockedAt(world.grid, x + r, y - r) ||
-    isBlockedAt(world.grid, x - r, y + r) ||
-    isBlockedAt(world.grid, x + r, y + r)
-  );
+  return bodyBlocked(world.grid, x, y, PLAYER_RADIUS);
 }

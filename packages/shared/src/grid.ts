@@ -89,6 +89,31 @@ export function isBlockedAt(grid: OccluderGrid, x: number, y: number): boolean {
   return isOpaqueTile(grid, Math.floor(x / TILE_M), Math.floor(y / TILE_M));
 }
 
+/**
+ * Would a body of `radius` centred here overlap solid rock?
+ *
+ * Tested at the four extremes of the body rather than at its centre: a 0.35m
+ * radius against 1m tiles means a centre-only test lets you stand half inside a
+ * trunk, and half inside a trunk is where you get stuck.
+ *
+ * Players and creatures share this deliberately. They move on the same geometry
+ * and a creature that could clip a corner a player cannot would be able to cut
+ * a chase short in a way no amount of tuning would make feel fair.
+ */
+export function bodyBlocked(
+  grid: OccluderGrid,
+  x: number,
+  y: number,
+  radius: number,
+): boolean {
+  return (
+    isBlockedAt(grid, x - radius, y - radius) ||
+    isBlockedAt(grid, x + radius, y - radius) ||
+    isBlockedAt(grid, x - radius, y + radius) ||
+    isBlockedAt(grid, x + radius, y + radius)
+  );
+}
+
 export function setTile(grid: OccluderGrid, tx: number, ty: number, opacity: number): void {
   if (tx < 0 || ty < 0 || tx >= grid.w || ty >= grid.h) return;
   grid.cells[ty * grid.w + tx] = opacity;

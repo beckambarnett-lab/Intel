@@ -361,6 +361,138 @@ export const SOUND_RADIUS_M = {
   gunshot: 60,
 } as const;
 
+/**
+ * How long a sound stays in the world before it is discarded.
+ *
+ * Sounds are a one-tick event, not a lingering field: something either heard
+ * the footfall as it happened or it did not. What persists is the *memory* a
+ * creature formed of it, which lives on the creature, not on the world.
+ */
+export const SOUND_LIFETIME_TICKS = 1;
+
+/**
+ * Ticks between chop reports while a player is mid-swing (Q16/Q17).
+ *
+ * A swing is 0.7s, which is 14 ticks. Reporting once per swing rather than once
+ * per tick keeps a two-second chop at two entries in the director's perception
+ * log instead of forty — the noise is identical to a listener either way, but
+ * the log is the LLM's whole view of the world and it should read like events,
+ * not like a sample stream.
+ */
+export const SOUND_CHOP_PERIOD_TICKS = 14;
+
+// ---------------------------------------------------------------------------
+// Creatures (§8)
+// ---------------------------------------------------------------------------
+
+/** How many hunt the tube (Q56). */
+export const CREATURE_COUNT = 4;
+
+/** Collision radius, metres. Slightly wider than a player — they are bigger. */
+export const CREATURE_RADIUS = 0.4;
+
+/** Shots to kill (Q66). Nothing fires until Step 7; the pool exists now. */
+export const CREATURE_HEALTH = 5;
+
+/** Seconds before a killed creature returns from the lair (Q57). */
+export const CREATURE_RESPAWN_SEC = 300;
+
+/**
+ * Speed per stance, as a multiple of an *unloaded* player's walk speed (Q61).
+ *
+ * The two numbers Q61 fixes are 0.9 patrolling and 1.15 pursuing, and the gap
+ * between them is the whole chase: you cannot outrun one while carrying a load,
+ * so the answer is never to run — it is to break line of sight and go dark.
+ * The other stances interpolate between those two poles or sit at zero.
+ */
+export const CREATURE_STANCE_SPEED = {
+  hold: 0,
+  stalk: 0.75,
+  sweep: 0.9,
+  charge: 1.15,
+  withdraw: 1.0,
+  sabotage: 0.9,
+} as const;
+
+/**
+ * How long a creature keeps acting on a contact before it goes cold, seconds.
+ *
+ * This is deliberately generous. A creature that forgets you the instant you
+ * break line of sight is a creature you beat by stepping behind a trunk; one
+ * that keeps coming to where it last had you is a creature you beat by going
+ * somewhere else, which is the behaviour the whole light economy is built to
+ * make expensive.
+ */
+export const CREATURE_CONTACT_MEMORY_SEC = 25;
+
+/** Inside this range a creature commits: stalk becomes charge. */
+export const CREATURE_CHARGE_RANGE_M = 12;
+
+/** Contact at this range kills (Q62). */
+export const CREATURE_KILL_RANGE_M = 1.1;
+
+/**
+ * Range at which a creature finds you regardless of light or sound.
+ *
+ * Standing still is silence, not invisibility. At arm's length in the dark a
+ * hunter that walked to exactly where it last saw you would otherwise shrug and
+ * wander off while you stood in front of it, because you emitted nothing it
+ * could sense — which reads as a bug to anyone it happens to.
+ *
+ * Kept just above the arrival radius so that giving up and finding you resolve
+ * in the right order: it can only conclude the trail is cold from somewhere it
+ * has already established you are not.
+ */
+export const CREATURE_PROXIMITY_SENSE_M = 2.5;
+
+/** How close a creature needs to get before a contact counts as investigated. */
+export const CREATURE_ARRIVE_M = 1.5;
+
+/**
+ * How far a creature can make out a *player* lit by the bonfire rather than by
+ * their own lantern. Mirrors LIT_FIGURE_VISIBLE_M on the player side so that
+ * standing in the firelight is exactly as revealing to them as it is to you.
+ */
+export const CREATURE_LIT_FIGURE_M = 70;
+
+/**
+ * Noise a creature makes moving, as a sound radius in metres.
+ *
+ * They are not quiet. This is what makes listen mode (Step 7) a real instrument
+ * rather than a gimmick — the thing hunting you is audible before it is visible,
+ * and the faster it commits the louder it gets.
+ */
+export const CREATURE_SOUND_RADIUS_M = {
+  hold: 0,
+  stalk: 4,
+  sweep: 12,
+  charge: 26,
+  withdraw: 14,
+  sabotage: 18,
+} as const;
+
+/** Seconds between sniffs while hunting (Q69). Deterministic, not random. */
+export const CREATURE_SNIFF_MIN_SEC = 2;
+export const CREATURE_SNIFF_MAX_SEC = 4;
+
+/**
+ * Vocalizations, and how far each carries in metres.
+ *
+ * These are the player's only channel onto creature intent (§8). A call is not
+ * flavour: `summon` transfers one creature's belief to every creature that
+ * hears it, so hearing one and hearing it answered is a real, readable event
+ * — the pack has just agreed on where you are.
+ */
+export const CREATURE_VOCAL_RANGE_M = {
+  summon: 80,
+  converge: 45,
+  contact: 35,
+  lost: 25,
+} as const;
+
+/** Minimum seconds between one creature's vocalizations. */
+export const CREATURE_VOCAL_COOLDOWN_SEC = 4;
+
 // ---------------------------------------------------------------------------
 // World (§14)
 // ---------------------------------------------------------------------------

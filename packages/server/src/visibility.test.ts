@@ -1,6 +1,7 @@
 import {
   LANTERN_STAGES,
   VISIBILITY_HYSTERESIS_MS,
+  createCreature,
   createPlayer,
   createWorld,
   fillRect,
@@ -335,5 +336,86 @@ describe('removal hysteresis', () => {
     delete w.players['p2'];
 
     expect(idsVisibleTo(index, w, 'p1', 10)).toEqual(['p1']);
+  });
+});
+
+/**
+ * Creatures go through exactly the same cull as everything else, plus one rule
+ * that is theirs alone: a `Creature` carries `contact`, which is a real
+ * position belonging to a real player. Shipping the struct as-is would hand
+ * every client a live feed of wherever any creature has recently sensed
+ * anyone — a worse leak than the one the culling exists to prevent, and one
+ * that would be invisible in play because the game would look perfectly normal.
+ */
+describe('creature visibility (Q122)', () => {
+  function addCreature(w: WorldState, id: string, x: number, y: number) {
+    const c = createCreature(id, { x, y });
+    w.creatures[id] = c;
+    return c;
+  }
+
+  it('does NOT send a creature standing in the dark', () => {
+    const w = world();
+    const viewer = addPlayer(w, 'p1', 60, 20);
+    viewer.lantern.stage = 'hooded';
+    viewer.lantern.target = 'hooded';
+    addCreature(w, 'c1', 30, 20);
+
+    const index = new VisibilityIndex();
+    expect(index.visibleCreaturesTo(w, 'p1', 0)).toEqual([]);
+  });
+
+  it('sends one standing in your lantern light', () => {
+    const w = world();
+    const viewer = addPlayer(w, 'p1', 60, 20);
+    viewer.lantern.stage = 'full';
+    viewer.lantern.target = 'full';
+    addCreature(w, 'c1', 60 + LANTERN_STAGES.full.radiusM - 1, 20);
+
+    const index = new VisibilityIndex();
+    expect(index.visibleCreaturesTo(w, 'p1', 0).map((c) => c.id)).toEqual(['c1']);
+  });
+
+  it('never puts a creature\'s contact on the wire', () => {
+    const w = world();
+    const viewer = addPlayer(w, 'p1', 60, 20);
+    viewer.lantern.stage = 'full';
+    viewer.lantern.target = 'full';
+
+    const creature = addCreature(w, 'c1', 63, 20);
+    // Give it a memory of somebody standing somewhere else entirely.
+    creature.contact = {
+      pos: { x: 5, y: 35 },
+      via: 'light',
+      tick: 0,
+      confidence: 1,
+    };
+
+    const index = new VisibilityIndex();
+    const sent = index.visibleCreaturesTo(w, 'p1', 0);
+    expect(sent).toHaveLength(1);
+
+    // The secret must not survive serialisation in any form.
+    const wire = JSON.stringify(sent);
+    expect(wire).not.toContain('contact');
+    expect(wire).not.toContain('35');
+    expect(Object.keys(sent[0]!).sort()).toEqual(
+      ['alive', 'facing', 'id', 'pos', 'stance'].sort(),
+    );
+  });
+
+  it('does not reveal that a creature is dead', () => {
+    const w = world();
+    const viewer = addPlayer(w, 'p1', 60, 20);
+    viewer.lantern.stage = 'full';
+    viewer.lantern.target = 'full';
+
+    const creature = addCreature(w, 'c1', 63, 20);
+    creature.alive = false;
+
+    const index = new VisibilityIndex();
+    // Counting the bodies is a fact worth hiding — knowing three of four are
+    // down changes how you play the next ten minutes.
+    expect(index.visibleCreaturesTo(w, 'p1', 0)).toEqual([]);
   });
 });

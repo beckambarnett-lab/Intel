@@ -1,4 +1,6 @@
 import {
+  CREATURE_COUNT,
+  CREATURE_RADIUS,
   PLAYER_RADIUS,
   SANDBOX_HEIGHT_M,
   SANDBOX_MAP_SEED,
@@ -9,7 +11,9 @@ import {
   TICK_DT,
   TICK_MS,
   TICK_RATE,
+  bodyBlocked,
   canSee,
+  createCreature,
   createFire,
   createPlayer,
   createWorld,
@@ -33,9 +37,11 @@ import type {
   WorldState,
 } from '@ember/shared';
 import type { WebSocket } from 'ws';
-import type { MapKind } from '@ember/shared';
+import type { MapKind, SimHooks } from '@ember/shared';
 import { tubeCampPos } from '@ember/shared';
-import { VisibilityIndex, fireViewFor } from './visibility.js';
+import { creatureAct } from './creature/instinct.js';
+import { creatureSense } from './creature/senses.js';
+import { VisibilityIndex, audibleCallsTo, fireViewFor } from './visibility.js';
 
 /**
  * Bound on how many unconsumed inputs we hold per client. One tick is consumed
@@ -74,6 +80,13 @@ export class Room {
   private readonly mapKind: MapKind;
 
   /**
+   * Stages 9 and 10. Passed to `step()` here and nowhere else — a client
+   * constructs no hooks, so creature sensing and decisions simply do not exist
+   * on its side of the wire. See `SimHooks` for why they are not plain stages.
+   */
+  private readonly hooks: SimHooks = { creatureSense, creatureAct };
+
+  /**
    * @param mapSeed  world seed; clients rebuild identical geometry from it
    * @param mapKind  'tube' is the real map. 'sandbox' is the small Step 1
    *                 rectangle, kept for tests — asserting that two clients can
@@ -91,6 +104,59 @@ export class Room {
         : createWorld(SANDBOX_WIDTH_M, SANDBOX_HEIGHT_M, gridFromMap(map));
     populateFromMap(this.world, map);
     refreshFire(this.world.fire);
+    this.spawnCreatures();
+  }
+
+  /**
+   * Place the four hunters (Q56).
+   *
+   * Spread down the far end of the tube rather than clustered, and never near
+   * camp: the opening minutes are meant to be quiet enough to teach the loop
+   * (Q132), and the pressure is supposed to arrive as you range outward, not to
+   * be waiting at the fire. Each keeps its spawn as an anchor, so with nothing
+   * to chase the four of them behave like a territory rather than a pack.
+   */
+  private spawnCreatures(): void {
+    this.world.creatures = {};
+
+    // The sandbox is a 60x40 fixture for building and testing the light and
+    // visibility systems, not a playable map. Four hunters inside it start
+    // within seconds of the camp, which is neither the tuning Q132 asks for nor
+    // a configuration anything is meant to be verified against. Creature
+    // behaviour is tested directly against a constructed world instead — faster,
+    // deterministic, and it does not need a socket.
+    if (this.mapKind !== 'tube') return;
+
+    const w = this.world.bounds.w;
+    const h = this.world.bounds.h;
+    // Start beyond the near wood and run out toward the lair.
+    const from = w * 0.4;
+    const span = w * 0.5;
+
+    for (let i = 0; i < CREATURE_COUNT; i++) {
+      const x = from + (span * (i + 0.5)) / CREATURE_COUNT;
+      // Alternate sides of the tube so they do not file down the middle.
+      const y = h * (i % 2 === 0 ? 0.32 : 0.68);
+      const pos = this.freeSpotNear(x, y);
+      const id = `c${i + 1}`;
+      this.world.creatures[id] = createCreature(id, pos);
+    }
+  }
+
+  /** Nearest unblocked point to (x, y), searching outward in a short spiral. */
+  private freeSpotNear(x: number, y: number): { x: number; y: number } {
+    for (let ring = 0; ring < 24; ring++) {
+      for (let step = 0; step < 8; step++) {
+        const angle = (step * Math.PI * 2) / 8;
+        const r = ring * CREATURE_RADIUS * 3;
+        const p = { x: x + Math.cos(angle) * r, y: y + Math.sin(angle) * r };
+        if (p.x < CREATURE_RADIUS || p.y < CREATURE_RADIUS) continue;
+        if (p.x > this.world.bounds.w - CREATURE_RADIUS) continue;
+        if (p.y > this.world.bounds.h - CREATURE_RADIUS) continue;
+        if (!bodyBlocked(this.world.grid, p.x, p.y, CREATURE_RADIUS)) return p;
+      }
+    }
+    return { x, y };
   }
 
   start(): void {
@@ -190,6 +256,9 @@ export class Room {
     // Derive tier and radii now rather than on the next tick — someone can
     // join in between, and they must not see an unlit camp.
     refreshFire(this.world.fire);
+    this.world.sounds = [];
+    this.world.nextSoundId = 1;
+    this.spawnCreatures();
     this.world.runSec = 0;
     this.world.outcome = null;
     console.log('[room] camp empty — run reset');
@@ -248,7 +317,7 @@ export class Room {
       }
     }
 
-    step(this.world, inputs, TICK_DT);
+    step(this.world, inputs, TICK_DT, this.hooks);
     this.broadcast();
   }
 
@@ -264,9 +333,11 @@ export class Room {
     for (const conn of this.connections.values()) {
       if (conn.socket.readyState !== conn.socket.OPEN) continue;
 
+      const viewer = this.world.players[conn.playerId];
       const players = this.visibility.visibleTo(this.world, conn.playerId, now);
       const items = this.visibility.visibleItemsTo(this.world, conn.playerId, now);
       const felled = this.visibility.visibleFelledTilesTo(this.world, conn.playerId);
+      const creatures = this.visibility.visibleCreaturesTo(this.world, conn.playerId, now);
 
       conn.socket.send(
         encode({
@@ -278,6 +349,8 @@ export class Room {
           felled,
           woodpile: this.woodpileViewFor(conn.playerId),
           fire: fireViewFor(this.world, conn.playerId),
+          creatures,
+          calls: viewer ? audibleCallsTo(this.world, viewer) : [],
           outcome: this.world.outcome,
         }),
       );

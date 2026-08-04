@@ -12,6 +12,8 @@ import {
 import { createGrid } from './grid.js';
 import type { OccluderGrid } from './grid.js';
 import type { Vec2 } from './math.js';
+import type { Creature, CreatureId } from './sim/creatures.js';
+import type { SoundEvent } from './sim/sound.js';
 
 export type PlayerId = string;
 
@@ -118,6 +120,16 @@ export interface Player {
   carrying: Carrying;
   /** Q15: standing trees need an axe. See PLAYERS_START_WITH_AXE. */
   hasAxe: boolean;
+  /**
+   * False once a creature has reached you (Q62). There is no downed state — the
+   * ghost is the second chance — but the ghost itself is Step 8. Until then a
+   * dead player simply stops: no movement, no sound, and nothing senses them.
+   *
+   * Kept as a flag on Player rather than by deleting the entry so the socket
+   * stays open and the client keeps receiving snapshots. Step 8 turns this into
+   * a real ghost with true sight and voice; nothing else needs to change here.
+   */
+  alive: boolean;
   /**
    * Movement intent for this tick, set by stage 1 and consumed by stage 3.
    * Intent is separated from velocity so that weight (stage 2) gets to act on
@@ -232,6 +244,7 @@ export function createPlayer(id: PlayerId, name: string, pos: Vec2): Player {
     lantern: createLantern(),
     carrying: emptyCarrying(),
     hasAxe: PLAYERS_START_WITH_AXE,
+    alive: true,
     intent: { x: 0, y: 0, sprint: false, creep: false },
     stokeProgress: 0,
     depositProgress: 0,
@@ -291,8 +304,21 @@ export interface WorldState {
   items: Record<string, WorldItem>;
   /** Standing and felled trees, by id. Never respawn (Q18). */
   trees: Record<string, Tree>;
+  /**
+   * The hunters (Q56). Empty on a client: creature sensing and decisions are
+   * server-only, and a client is sent only the ones it can currently see.
+   */
+  creatures: Record<CreatureId, Creature>;
+  /**
+   * Sounds made this tick, and only this tick (§9). Cleared and refilled by
+   * stage 4; creature sensing at stage 9 is the consumer. Nothing here
+   * survives into the next tick — what persists is what a creature remembers.
+   */
+  sounds: SoundEvent[];
   /** Monotonic source of item ids. Server-authoritative. */
   nextItemId: number;
+  /** Monotonic source of sound ids. Never Math.random — the client replays this. */
+  nextSoundId: number;
   /** Null while the run is live. */
   outcome: Outcome | null;
   /**
@@ -342,7 +368,10 @@ export function createWorld(
     players: {},
     items: {},
     trees: {},
+    creatures: {},
+    sounds: [],
     nextItemId: 1,
+    nextSoundId: 1,
     outcome: null,
     runSec: 0,
   };
