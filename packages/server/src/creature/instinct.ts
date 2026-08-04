@@ -6,19 +6,26 @@ import {
   CREATURE_KILL_RANGE_M,
   CREATURE_RADIUS,
   CREATURE_RESPAWN_SEC,
+  CREATURE_SABOTAGE_BATCH,
+  CREATURE_SABOTAGE_RANGE_M,
+  CREATURE_SABOTAGE_SEC,
   FIRE_CAPACITY,
   FIRE_PERIMETER_MIN_FRAC,
+  SABOTAGE_SCATTER_MAX_M,
+  SABOTAGE_SCATTER_MIN_M,
   UTILITY_PATROL,
   UTILITY_PURSUE,
+  UTILITY_SABOTAGE,
   UTILITY_SEARCH,
   UTILITY_SIEGE,
   UTILITY_SPACING_M,
   UTILITY_SPACING_WEIGHT,
   bodyBlocked,
   mulberry32,
+  spawnItem,
   vocalize,
 } from '@ember/shared';
-import type { Creature, Stance, Vec2, WorldState } from '@ember/shared';
+import type { Creature, ItemKind, Stance, Vec2, WorldState } from '@ember/shared';
 import { bestSearchTarget, markChecked, totalBelief } from './belief.js';
 import type { BeliefField } from './belief.js';
 import type { Personality } from './personality.js';
@@ -49,7 +56,7 @@ export interface Mind {
   personality: Personality;
 }
 
-type OptionKind = 'pursue' | 'search' | 'patrol' | 'siege';
+type OptionKind = 'pursue' | 'search' | 'patrol' | 'siege' | 'sabotage';
 
 interface Option {
   kind: OptionKind;
@@ -200,6 +207,119 @@ function siegeOption(world: WorldState, creature: Creature): Option | null {
 }
 
 /**
+ * Going for the woodpile (Q24).
+ *
+ * Their primary sabotage, and it needs no permission system of its own: a
+ * creature can only work the pile if it can stand within reach of it, and the
+ * fire's own safe radius already decides where it may stand. A healthy fire
+ * keeps the wood untouchable; a failing one exposes it. So the threat arrives
+ * precisely when it hurts most — they start taking the fuel at the moment you
+ * most need it — without a single line deciding that it should.
+ *
+ * They do not destroy it. Scattered wood is still yours if you are willing to
+ * go out into the dark and find it, which is the same bargain Q29 makes for
+ * dragged scrap.
+ */
+function sabotageOption(world: WorldState, creature: Creature): Option | null {
+  const pile = world.woodpile;
+  const stock = pile.contents.log + pile.contents.branch;
+  if (stock <= 0) return null;
+
+  const fire = world.fire;
+  const pileToFire = dist(pile.pos, fire.pos);
+  const reach = CREATURE_SABOTAGE_RANGE_M;
+
+  // Can a creature stand anywhere close enough to work it? The perimeter is a
+  // hard wall (see `blocked` in creatures.ts), so this is pure geometry.
+  if (fire.safeRadiusM > 0 && fire.safeRadiusM > pileToFire + reach) return null;
+
+  // Stand off the pile on the side away from the fire, the only side it can
+  // legally approach from while any perimeter remains.
+  const away = pileToFire || 1;
+  const standoff = Math.max(fire.safeRadiusM, pileToFire) + 0.2;
+  const goal =
+    fire.safeRadiusM > 0
+      ? {
+          x: fire.pos.x + ((pile.pos.x - fire.pos.x) / away) * standoff,
+          y: fire.pos.y + ((pile.pos.y - fire.pos.y) / away) * standoff,
+        }
+      : { ...pile.pos };
+
+  // A big pile is worth more than a nearly empty one — there is no point
+  // standing in the open for three seconds to hurl two branches.
+  const worth = Math.min(1, stock / 10);
+
+  return { kind: 'sabotage', goal, stance: 'sabotage', score: UTILITY_SABOTAGE * worth };
+}
+
+/**
+ * Advance a sabotage channel, and scatter a batch when it completes.
+ *
+ * Runs every tick after the bodies have moved, so progress reflects where the
+ * creature actually ended up rather than where it intended to go.
+ */
+export function progressSabotage(world: WorldState, dt: number): void {
+  const pile = world.woodpile;
+
+  for (const id of Object.keys(world.creatures)) {
+    const creature = world.creatures[id];
+    if (!creature || !creature.alive) continue;
+
+    const working =
+      creature.stance === 'sabotage' &&
+      dist(creature.pos, pile.pos) <= CREATURE_SABOTAGE_RANGE_M &&
+      pile.contents.log + pile.contents.branch > 0;
+
+    if (!working) {
+      // Interrupted, exactly like a player's stoke: walking away costs you the
+      // seconds you had put in.
+      creature.sabotageProgress = 0;
+      continue;
+    }
+
+    creature.sabotageProgress += dt;
+    if (creature.sabotageProgress < CREATURE_SABOTAGE_SEC) continue;
+
+    creature.sabotageProgress = 0;
+    scatter(world, creature);
+  }
+}
+
+/** Hurl a batch of wood out past the firelight, where it is very hard to find. */
+function scatter(world: WorldState, creature: Creature): void {
+  const pile = world.woodpile;
+  const rand = mulberry32(
+    (Math.imul(world.tick, 2654435761) ^ creature.id.charCodeAt(creature.id.length - 1)) >>> 0,
+  );
+
+  for (let i = 0; i < CREATURE_SABOTAGE_BATCH; i++) {
+    // Logs first: they are the fuel that matters, and losing them hurts most.
+    const kind: ItemKind = pile.contents.log > 0 ? 'log' : 'branch';
+    if (pile.contents[kind] <= 0) break;
+    pile.contents[kind] -= 1;
+
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const angle = rand() * Math.PI * 2;
+      const radius =
+        world.fire.safeRadiusM +
+        SABOTAGE_SCATTER_MIN_M +
+        rand() * (SABOTAGE_SCATTER_MAX_M - SABOTAGE_SCATTER_MIN_M);
+
+      const p = {
+        x: world.fire.pos.x + Math.cos(angle) * radius,
+        y: world.fire.pos.y + Math.sin(angle) * radius,
+      };
+
+      if (p.x < 1 || p.y < 1 || p.x > world.bounds.w - 1 || p.y > world.bounds.h - 1) continue;
+      if (bodyBlocked(world.grid, p.x, p.y, CREATURE_RADIUS)) continue;
+
+      spawnItem(world, kind, p);
+      break;
+    }
+  }
+}
+
+/**
  * Choose a stance and a goal.
  *
  * Called at the tactical rate, not every tick — see CREATURE_THINK_PERIOD_TICKS
@@ -228,6 +348,9 @@ export function decide(world: WorldState, creature: Creature, mind: Mind): void 
 
   const siege = siegeOption(world, creature);
   if (siege) options.push(siege);
+
+  const sabotage = sabotageOption(world, creature);
+  if (sabotage) options.push(sabotage);
 
   options.push(patrolOption(world, creature));
 

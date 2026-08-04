@@ -471,6 +471,44 @@ export const CREATURE_SOUND_RADIUS_M = {
   sabotage: 18,
 } as const;
 
+// --- Sabotage (Q24) -------------------------------------------------------
+
+/**
+ * Seconds of uninterrupted work to scatter a batch of wood (Q24).
+ *
+ * Sabotage needs no separate permission system: a creature can only reach the
+ * pile if it can stand within reach of it, and the fire's safe radius (Q7)
+ * already decides where it may stand. The camp woodpile sits 4m from the flame,
+ * and the perimeter is 9.8m at Roaring, 7m at Burning, 4.2m at Low — so the
+ * wood is untouchable while the fire is healthy and becomes reachable from the
+ * perimeter's edge exactly as it drops to Low.
+ *
+ * That escalation is the point, and it is why this is their primary sabotage
+ * (Q24): the moment your fire starts failing is the moment they can begin
+ * taking the fuel you need to save it.
+ */
+export const CREATURE_SABOTAGE_SEC = 3;
+
+/** How far a creature can reach into the pile from where it stands. */
+export const CREATURE_SABOTAGE_RANGE_M = 2;
+
+/**
+ * Items hurled per completed channel.
+ *
+ * A batch rather than the whole pile. Losing everything to one three-second
+ * window would be a death sentence disguised as a mechanic; losing six logs at
+ * a time is a problem you can run at, and the creature has to stand there and
+ * keep working while you do.
+ */
+export const CREATURE_SABOTAGE_BATCH = 6;
+
+/** How far into the dark the wood goes, beyond the fire's safe radius. */
+export const SABOTAGE_SCATTER_MIN_M = 4;
+export const SABOTAGE_SCATTER_MAX_M = 14;
+
+/** Pull toward an undefended woodpile. */
+export const UTILITY_SABOTAGE = 7;
+
 /** Seconds between sniffs while hunting (Q69). Deterministic, not random. */
 export const CREATURE_SNIFF_MIN_SEC = 2;
 export const CREATURE_SNIFF_MAX_SEC = 4;

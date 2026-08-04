@@ -21,7 +21,7 @@ import {
   injectBelief,
   markChecked,
 } from './belief.js';
-import { decide, resolveContact, respawn } from './instinct.js';
+import { decide, progressSabotage, resolveContact, respawn } from './instinct.js';
 import type { Mind } from './instinct.js';
 import { personalityFor } from './personality.js';
 import { creatureSense } from './senses.js';
@@ -206,6 +206,9 @@ export class CreatureMind {
 
     this.propagateCalls(world);
     moveCreatures(world, dt);
+    // After the bodies move, so progress reflects where a creature actually
+    // ended up rather than where it meant to go.
+    progressSabotage(world, dt);
     resolveContact(world);
   }
 

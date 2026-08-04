@@ -102,6 +102,12 @@ export interface Creature {
   /** Seconds until the next sniff while hunting (Q69). */
   sniffIn: number;
   /**
+   * Seconds accumulated into the current woodpile channel (Q24). Reset the
+   * moment the creature stops working, exactly like a player's stoke — walking
+   * away loses the progress.
+   */
+  sabotageProgress: number;
+  /**
    * Hits taken this life. Drives the desperation escalation in Step 7 (Q70) —
    * a wounded creature gets louder and more erratic, not weaker.
    */
@@ -124,6 +130,7 @@ export function createCreature(id: CreatureId, pos: Vec2): Creature {
     vocalCooldown: 0,
     vocalizing: null,
     sniffIn: CREATURE_SNIFF_MAX_SEC,
+    sabotageProgress: 0,
     damageTaken: 0,
   };
 }
