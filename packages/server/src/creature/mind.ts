@@ -23,10 +23,11 @@ import {
 } from './belief.js';
 import { CallBudget } from '../director/budget.js';
 import { followOrder } from '../director/orders.js';
+import { Strategist } from '../director/strategist.js';
 import { Tactician } from '../director/tactician.js';
-import type { ValidatedOrderSet } from '../director/schema.js';
-import { decide, progressSabotage, resolveContact, respawn } from './instinct.js';
-import type { Mind } from './instinct.js';
+import type { CreatureRole, ValidatedOrderSet, ValidatedPlan } from '../director/schema.js';
+import { DEFAULT_DIRECTIVE, decide, progressSabotage, resolveContact, respawn } from './instinct.js';
+import type { Directive, Mind } from './instinct.js';
 import { personalityFor } from './personality.js';
 import { creatureSense } from './senses.js';
 
@@ -56,6 +57,24 @@ export class CreatureMind {
    */
   private readonly tactician: Tactician | null;
 
+  /** The strategic tier. Null in tests and on any run without an API key. */
+  private readonly strategist: Strategist | null;
+
+  /** The commander's current plan, and when it stops being binding. */
+  private currentPlan: ValidatedPlan | null = null;
+  private planHoldUntilTick = 0;
+
+  /**
+   * Roles from the current plan, held by creature id.
+   *
+   * Kept here rather than written straight onto minds because minds are created
+   * lazily on a creature's first tick: a plan installed before a creature has
+   * ever been simulated would find nothing to assign to and the role would
+   * silently vanish. Applied in `mindFor`, so it lands whenever the mind
+   * appears.
+   */
+  private plannedRoles = new Map<CreatureId, CreatureRole>();
+
   /** Set when something worth re-planning has happened. */
   private eventPending = false;
 
@@ -68,8 +87,25 @@ export class CreatureMind {
   constructor(
     private readonly runSeed: number,
     tactician: Tactician | null = null,
+    strategist: Strategist | null = null,
   ) {
     this.tactician = tactician;
+    this.strategist = strategist;
+  }
+
+  /**
+   * The posture every creature is scored against.
+   *
+   * Falls back to ordinary hunting whenever there is no plan — which is the
+   * whole of a keyless run, and every run's opening minutes. The instinct tier
+   * is tuned against this default, so an absent commander changes nothing.
+   */
+  private get directive(): Directive {
+    if (!this.currentPlan) return DEFAULT_DIRECTIVE;
+    return {
+      posture: this.currentPlan.posture,
+      aggression: this.currentPlan.aggression,
+    };
   }
 
   /** Fresh minds for a fresh run. Belief must never survive a reset. */
@@ -79,6 +115,9 @@ export class CreatureMind {
     this.hadContact.clear();
     this.eventPending = false;
     this.plan = null;
+    this.currentPlan = null;
+    this.planHoldUntilTick = 0;
+    this.plannedRoles.clear();
   }
 
   private mindFor(world: WorldState, id: CreatureId): Mind {
@@ -88,6 +127,7 @@ export class CreatureMind {
         belief: createBelief(world.bounds.w, world.bounds.h),
         personality: personalityFor(id, this.runSeed),
         standing: null,
+        role: this.plannedRoles.get(id) ?? null,
       };
       this.minds.set(id, mind);
     }
@@ -328,7 +368,7 @@ export class CreatureMind {
       if (mind.standing && followOrder(world, creature, mind.belief, mind.standing)) continue;
       mind.standing = null;
 
-      decide(world, creature, mind);
+      decide(world, creature, mind, this.directive);
     }
 
     this.lastTick = world.tick;
@@ -340,6 +380,81 @@ export class CreatureMind {
     resolveContact(world);
 
     this.maybeRequestOrders();
+    this.maybeRequestPlan(world);
+  }
+
+  /**
+   * Ask the commander for a plan.
+   *
+   * Gated on `planHoldUntilTick` as well as on the budget, and that gate is the
+   * mechanism behind a deliberate lull. A commander that decides to back off
+   * needs the decision to outlive the next contact edge — otherwise the fast
+   * tier re-engages within seconds and the pause it asked for never happens.
+   */
+  private maybeRequestPlan(world: WorldState): void {
+    const strategist = this.strategist;
+    if (!strategist) return;
+    if (world.tick < this.planHoldUntilTick) return;
+
+    const now = Date.now();
+    if (!strategist.budget.mayCall(now)) return;
+
+    strategist.budget.start(now);
+    const snapshot = this.perception.snapshot();
+    const previous = this.currentPlan;
+
+    void strategist
+      .requestPlan(snapshot, previous)
+      .then((plan) => {
+        if (!plan) return;
+        this.installPlan(plan);
+      })
+      .catch(() => {
+        // Already reported to the budget. The pack keeps hunting regardless.
+      });
+  }
+
+  /**
+   * Install a plan directly, without going through the model.
+   *
+   * Public because the tuning harness (Step 13) needs to sweep aggression and
+   * posture over headless runs, and because a plan arriving from a fixture is
+   * indistinguishable from one arriving from Sonnet as far as everything below
+   * is concerned — which is exactly the property worth testing.
+   */
+  setPlan(plan: ValidatedPlan | null): void {
+    if (!plan) {
+      this.currentPlan = null;
+      this.plan = null;
+      this.planHoldUntilTick = 0;
+      this.plannedRoles.clear();
+      for (const mind of this.minds.values()) mind.role = null;
+      return;
+    }
+    this.installPlan(plan);
+  }
+
+  private installPlan(plan: ValidatedPlan): void {
+    this.currentPlan = plan;
+    this.plan = plan.guidance;
+    this.planHoldUntilTick = this.lastTick + Math.round(plan.holdSec / TICK_DT);
+
+    // Roles are cleared before being reassigned, so a creature dropped from the
+    // roster reverts to its own instincts rather than keeping a stale job.
+    this.plannedRoles.clear();
+    for (const mind of this.minds.values()) mind.role = null;
+    for (const { creatureId, role } of plan.roles) {
+      this.plannedRoles.set(creatureId, role);
+      const mind = this.minds.get(creatureId);
+      if (mind) mind.role = role;
+    }
+
+    this.intentLog.push({ tick: this.lastTick, intent: plan.intent });
+  }
+
+  /** The current plan, for the run summary and for tests. */
+  get planNow(): ValidatedPlan | null {
+    return this.currentPlan;
   }
 
   /**

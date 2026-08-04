@@ -28,6 +28,7 @@ import {
 import type { Creature, ItemKind, Stance, Vec2, WorldState } from '@ember/shared';
 import { bestSearchTarget, markChecked, totalBelief } from './belief.js';
 import type { StandingOrder } from '../director/orders.js';
+import type { CreatureRole } from '../director/schema.js';
 import type { BeliefField } from './belief.js';
 import type { Personality } from './personality.js';
 
@@ -64,7 +65,30 @@ export interface Mind {
    * inventiveness and nothing else.
    */
   standing: StandingOrder | null;
+  /**
+   * The job the commander has given this creature, if any.
+   *
+   * Null is normal and healthy — an unassigned creature runs on its own
+   * instincts, which are good. A role does not replace the scoring below, it
+   * leans on it.
+   */
+  role: CreatureRole | null;
 }
+
+/**
+ * The commander's standing posture, as the instinct tier experiences it.
+ *
+ * Defaults to ordinary hunting, which is what every run uses until a strategist
+ * says otherwise — and what every run uses for its whole length if there is no
+ * API key at all.
+ */
+export interface Directive {
+  posture: 'hunt' | 'press' | 'encircle' | 'siege' | 'withdraw';
+  /** Q120's difficulty lever: more pressure, never more information. */
+  aggression: number;
+}
+
+export const DEFAULT_DIRECTIVE: Directive = { posture: 'hunt', aggression: 0.5 };
 
 type OptionKind = 'pursue' | 'search' | 'patrol' | 'siege' | 'sabotage';
 
@@ -335,7 +359,12 @@ function scatter(world: WorldState, creature: Creature): void {
  * Called at the tactical rate, not every tick — see CREATURE_THINK_PERIOD_TICKS
  * for why re-deciding twenty times a second is worse than doing it four.
  */
-export function decide(world: WorldState, creature: Creature, mind: Mind): void {
+export function decide(
+  world: WorldState,
+  creature: Creature,
+  mind: Mind,
+  directive: Directive = DEFAULT_DIRECTIVE,
+): void {
   // Losing the trail is a state change, and it is the one the player most needs
   // to hear: it is the sound of going dark having worked. Handled before
   // scoring because it changes what there is to score.
@@ -365,11 +394,16 @@ export function decide(world: WorldState, creature: Creature, mind: Mind): void 
   options.push(patrolOption(world, creature));
 
   const { independence } = mind.personality;
+  // A flanker, or a pack told to encircle, works wider than it otherwise would.
+  const spread =
+    mind.role === 'flanker' || directive.posture === 'encircle' ? 2 : 1;
+
   let best = options[0]!;
   let bestScore = -Infinity;
 
   for (const option of options) {
-    const score = option.score - crowding(world, creature, option.goal, independence);
+    const weighted = option.score * commandWeight(option.kind, mind.role, directive);
+    const score = weighted - crowding(world, creature, option.goal, independence * spread);
     if (score > bestScore) {
       bestScore = score;
       best = option;
@@ -404,6 +438,61 @@ export function decide(world: WorldState, creature: Creature, mind: Mind): void 
       vocalize(world, creature, 'contact');
     }
   }
+}
+
+/**
+ * How the commander's posture and this creature's role bend the scoring.
+ *
+ * A multiplier on options the tier already generates rather than a new set of
+ * behaviours. That keeps the fallback honest: with no director at all every
+ * multiplier is 1 and the creature behaves exactly as the tuned instinct tier
+ * intends, which is the arrangement Q117 requires.
+ *
+ * `withdraw` is the interesting case. Damping pursuit hard does not make a
+ * creature flee — it makes patrol and search outscore chasing, so the pack
+ * drifts off the player and goes quiet. That is a lull rather than a rout,
+ * which is what a commander asking for one actually wants.
+ */
+function commandWeight(
+  kind: OptionKind,
+  role: CreatureRole | null,
+  directive: Directive,
+): number {
+  let weight = 1;
+
+  if (kind === 'pursue') {
+    weight *= 0.6 + 0.8 * directive.aggression;
+    if (directive.posture === 'press') weight *= 1.5;
+    if (directive.posture === 'withdraw') weight *= 0.08;
+    if (role === 'stalker') weight *= 1.4;
+    if (role === 'sentinel') weight *= 0.6;
+  }
+
+  if (kind === 'search') {
+    // Withdrawing has to damp searching too, and this is easy to get wrong.
+    // A belief peak is derived from the same observation that pursuit is
+    // chasing, so damping only pursuit swaps a chase for a search of the exact
+    // same spot — the creature keeps walking at the player and the lull the
+    // commander asked for never happens.
+    if (directive.posture === 'withdraw') weight *= 0.15;
+    if (role === 'sentinel') weight *= 0.5;
+    if (role === 'stalker') weight *= 1.3;
+  }
+
+  if (kind === 'patrol' && role === 'sentinel') weight *= 2.5;
+
+  if (kind === 'siege') {
+    if (directive.posture === 'siege') weight *= 2;
+    if (role === 'saboteur') weight *= 1.6;
+    if (directive.posture === 'withdraw') weight *= 0.3;
+  }
+
+  if (kind === 'sabotage') {
+    if (role === 'saboteur') weight *= 2;
+    if (directive.posture === 'siege') weight *= 1.5;
+  }
+
+  return weight;
 }
 
 /**

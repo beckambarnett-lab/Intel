@@ -671,6 +671,17 @@ export const TACTICIAN_MIN_SPACING_MS = 1500;
  */
 export const DIRECTOR_MAX_FAILURES = 3;
 
+/**
+ * Strategic tier spend control.
+ *
+ * Far rarer than the tactician. This tier decides posture rather than
+ * placement, and posture should not change every time somebody's lantern
+ * flickers — a commander that re-plans constantly has no plan. The spacing
+ * floor is the real limiter; the cap is a backstop for a very long run.
+ */
+export const STRATEGIST_MAX_CALLS_PER_RUN = 80;
+export const STRATEGIST_MIN_SPACING_MS = 20_000;
+
 // ---------------------------------------------------------------------------
 // World (§14)
 // ---------------------------------------------------------------------------

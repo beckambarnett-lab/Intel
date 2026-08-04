@@ -4,6 +4,8 @@ import {
   DIRECTOR_MAX_FAILURES,
   TACTICIAN_MAX_CALLS_PER_RUN,
   TACTICIAN_MIN_SPACING_MS,
+  STRATEGIST_MAX_CALLS_PER_RUN,
+  STRATEGIST_MIN_SPACING_MS,
   PLAYER_RADIUS,
   SANDBOX_HEIGHT_M,
   SANDBOX_MAP_SEED,
@@ -44,6 +46,7 @@ import type { MapKind, SimHooks } from '@ember/shared';
 import { tubeCampPos } from '@ember/shared';
 import { CreatureMind } from './creature/mind.js';
 import { CallBudget } from './director/budget.js';
+import { Strategist } from './director/strategist.js';
 import { Tactician } from './director/tactician.js';
 import { VisibilityIndex, audibleCallsTo, fireViewFor } from './visibility.js';
 
@@ -124,7 +127,14 @@ export class Room {
         maxConsecutiveFailures: DIRECTOR_MAX_FAILURES,
       }),
     );
-    this.mind = new CreatureMind(this.mapSeed, tactician);
+    const strategist = new Strategist(
+      new CallBudget({
+        maxCalls: STRATEGIST_MAX_CALLS_PER_RUN,
+        minSpacingMs: STRATEGIST_MIN_SPACING_MS,
+        maxConsecutiveFailures: DIRECTOR_MAX_FAILURES,
+      }),
+    );
+    this.mind = new CreatureMind(this.mapSeed, tactician, strategist);
     this.hooks = this.mind.hooks();
     this.spawnCreatures();
   }

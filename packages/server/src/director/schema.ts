@@ -79,3 +79,57 @@ export type ValidatedOrderSet = z.infer<typeof orderSetSchema>;
 export function orderSetJsonSchema(): Record<string, unknown> {
   return z.toJSONSchema(orderSetSchema, { io: 'output' }) as Record<string, unknown>;
 }
+
+/**
+ * The strategist's output.
+ *
+ * Deliberately not orders. The strategic tier decides *posture* — how the pack
+ * should be behaving, who is doing what, and when to stop pressing — and leaves
+ * placement to the tactician. Handing this tier waypoints would make it a slow,
+ * expensive version of the fast tier; handing it posture makes it the only
+ * layer in the stack that can decide the run needs a quiet ninety seconds.
+ */
+const role = z.enum(['stalker', 'sentinel', 'flanker', 'saboteur']);
+
+export const planSchema = z.object({
+  /**
+   * The commander's reasoning, in its own words (Q116).
+   *
+   * Surfaced to players after a run as the enemy's diary, which is the only
+   * channel this tier has for reaching them directly — everything else it does
+   * arrives filtered through four bodies moving in the dark.
+   */
+  intent: z.string().min(1).max(400),
+  /**
+   * How the pack should be carrying itself.
+   *
+   * `withdraw` is the one that matters and the reason this tier exists: a
+   * utility function will never choose to stop hunting in order to make the
+   * next contact frightening, because nothing in a score function represents
+   * dread. A commander can.
+   */
+  posture: z.enum(['hunt', 'press', 'encircle', 'siege', 'withdraw']),
+  /** Q120's difficulty lever — never more information, only more pressure. */
+  aggression: z.number().min(0).max(1),
+  /** Who is doing what. Creatures left unassigned keep their own instincts. */
+  roles: z
+    .array(z.object({ creatureId: z.string().min(1).max(16), role }))
+    .max(8),
+  /** Free text handed to the tactician as its standing plan. */
+  guidance: z.string().max(600),
+  /**
+   * Seconds to hold this posture before reconsidering.
+   *
+   * The mechanism behind a deliberate lull: a commander that decides to back
+   * off needs the decision to survive the next contact edge, or the fast tier
+   * simply re-engages and the pause never happens.
+   */
+  holdSec: z.number().min(0).max(240),
+});
+
+export type ValidatedPlan = z.infer<typeof planSchema>;
+export type CreatureRole = z.infer<typeof role>;
+
+export function planJsonSchema(): Record<string, unknown> {
+  return z.toJSONSchema(planSchema, { io: 'output' }) as Record<string, unknown>;
+}
