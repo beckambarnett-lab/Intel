@@ -13,6 +13,16 @@ The feeling to chase, in order of importance:
 If a prompt starts explaining how light works, it's gone wrong. Describe what it feels like to be
 the person standing there.
 
+**Settled after the first round:** the two figures sit *touching*. The game exists to put friends in
+a dark room together — the fire is the excuse, the company is the point, and every system underneath
+agrees (you can't haul enough wood alone, a corpse drags at half weight with two, and revival
+requires somebody else). Do not separate them for loneliness. The loneliness is the dark, not them.
+
+Also settled: **a creature should be barely visible at the frame edge**, mostly obscured by a trunk,
+at a size and contrast where a good share of viewers never find it. Ambiguity is the mechanic
+(Q52) — an image that only some people realise is being watched is that mechanic as a poster. Do
+not make it legible, and do not point at it.
+
 ---
 
 ## 1. Hero title art (primary)
@@ -32,6 +42,23 @@ the person standing there.
 > red are the only saturated notes, everything else near-black and cold ash grey. Heavy film grain,
 > crushed blacks, no moonlight, no blue, no fill light, no glow effects outside the letterforms.
 > Painterly, charcoal and ink, more suggestion than detail. --ar 16:9
+
+### v2 refinement pass
+
+The first generation landed. Two corrections carried forward — the letterform cracks came out as
+bright molten veins (reads as fantasy; the word is *ember*, the coals should be nearly out), and the
+glowing ground debris spread the light source into a scatter instead of one small fire.
+
+> Same composition. The cracks in the letterforms are far dimmer and sparser — dull dark red, nearly
+> extinguished, mostly cold grey charred stone with only a few faint coals surviving near the bases
+> of the letters, no bright molten veins, no orange saturation in the type. Remove the scattered
+> glowing debris on the ground; the fire is the single point source and the ground around it falls
+> off quickly into black.
+
+Worth keeping from that generation: the trunks resolved into a symmetrical corridor, which reads as
+a nave — the fire lands at the altar and the two figures become supplicants. Ask for it explicitly
+next time: *"receding trunks form a symmetrical corridor, cathedral-like, fire at the vanishing
+point."*
 
 ## 2. Intimate variant — the hands
 
