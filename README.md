@@ -19,10 +19,17 @@ You win by finding the amulet of darkness, picking it up, and running it back to
 
 ## Status
 
-**Step 1 of 13 complete** — skeleton, authoritative server, client prediction.
+**Steps 1–5 of 13 complete** — skeleton, darkness, the clock, the loop, memory rot. Next up is
+Step 6, creatures on a script.
 
 Full specification: [`DESIGN.md`](./DESIGN.md) — 20 locked decisions, 136 resolved questions, and a
 13-step implementation spec with the stack settled and per-step acceptance gates.
+
+Build plan for what remains: [`PLAN.md`](./PLAN.md) — Steps 6–13 against the code as it actually
+stands, including the four gaps no numbered step owns.
+
+Runbook: [`EXECUTION.md`](./EXECUTION.md) — how to drive a step, how to run its gate, and what to say
+when one fails.
 
 Agent orientation: [`CLAUDE.md`](./CLAUDE.md) — read this first if you are picking the project up.
 
@@ -76,4 +83,5 @@ All tunables live in `packages/shared/src/constants.ts`, cross-referenced to the
 ## Not yet reconciled
 
 The predecessor `Cinders game` project (`ARC.md`, `DESIGN.md`) records what was tried before and
-what broke. It was not available when `DESIGN.md` was written — reconcile it before Step 2.
+what broke. It was not available when `DESIGN.md` was written. The known collision is the
+ghost/revival system, so the deadline is now **before Step 8** — see [`PLAN.md`](./PLAN.md) §2.5.
